@@ -77,6 +77,18 @@ class MainWindow(ctk.CTk):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=24, pady=(18, 10))
         ctk.CTkLabel(header, text="", image=self._icon_image).pack(side="left")
+        ctk.CTkButton(
+            header,
+            text="刷新",
+            width=64,
+            height=30,
+            font=self._font_small,
+            fg_color=("gray88", "gray24"),
+            hover_color=("gray80", "gray30"),
+            text_color=TEXT,
+            corner_radius=8,
+            command=self._refresh_presence,
+        ).pack(side="right", padx=(10, 0))
         titles = ctk.CTkFrame(header, fg_color="transparent")
         titles.pack(side="left", padx=(14, 0), fill="x", expand=True)
         ctk.CTkLabel(
@@ -84,7 +96,7 @@ class MainWindow(ctk.CTk):
         ).pack(fill="x")
         ctk.CTkLabel(
             titles,
-            text="手机在附近时提供锁屏解锁选项，点击后才解锁",
+            text="点击锁屏按钮时检测手机，靠近才提交密码",
             font=self._font_small,
             text_color=MUTED,
             anchor="w",
@@ -209,7 +221,7 @@ class MainWindow(ctk.CTk):
         self._switch_row(
             inner,
             "锁屏点击解锁",
-            "手机在附近时显示解锁选项，点击后才提交密码",
+            "锁屏后可点击解锁，点击时检测手机是否在附近",
             self._click_unlock_var,
             self._on_click_unlock,
         )
@@ -251,7 +263,7 @@ class MainWindow(ctk.CTk):
         ).pack(side="left", padx=(10, 0))
         ctk.CTkLabel(
             inner,
-            text="手机靠近只会显示解锁选项，必须点击后才会解锁。",
+            text="手机靠近不会自动解锁；点击锁屏按钮并检测到手机在附近后才会提交密码。",
             font=self._font_small,
             text_color=MUTED,
             anchor="w",
@@ -514,16 +526,20 @@ class MainWindow(ctk.CTk):
         except Exception:
             log.exception("刷新界面失败")
 
+    def _refresh_presence(self) -> None:
+        self.controller.refresh_presence()
+        self.refresh_now()
+
     def _apply_snapshot(self, snap: dict) -> None:
         presence = snap["presence"]
         paused = snap["paused"]
         remote = snap["remote"]
         state = presence["state"]
-        source = snap.get("source")
+        source = presence.get("source")
         source_label = "手机广播" if source in ("phone", "app") else ""
         source_prefix = f"{source_label} · " if source_label else ""
-        phone_bound = snap.get("phone_bound")
-        phone_name = snap.get("phone_name") or "手机"
+        phone_bound = presence.get("phone_bound")
+        phone_name = presence.get("phone_name") or "手机"
 
         if paused:
             self._set_status("已暂停", "自动锁屏与手机解锁已关闭，广播扫描仍在进行", MUTED)
@@ -544,7 +560,7 @@ class MainWindow(ctk.CTk):
                 GREEN,
             )
         elif state == STATE_AWAY:
-            self._set_status("手机已离开", "已确认离开；重新靠近后可在锁屏点击解锁", AMBER)
+            self._set_status("手机已离开", "已确认离开；在锁屏点击解锁时会重新检测", AMBER)
         elif presence["seen_since_start"]:
             self._set_status(
                 "正在判断距离…", f"{source_prefix}已检测到手机广播，正在确认远近", MUTED
@@ -555,7 +571,7 @@ class MainWindow(ctk.CTk):
                 f"已绑定「{phone_name}」，请保持手机蓝牙开启",
                 MUTED,
             )
-        elif snap.get("phone_adv_enabled", True):
+        elif presence.get("phone_adv_enabled", True):
             self._set_status(
                 "正在识别手机广播",
                 "保持手机蓝牙开启，识别到后会自动绑定",
@@ -575,16 +591,16 @@ class MainWindow(ctk.CTk):
                 extra_text = "当前屏幕：已锁定 · 手机解锁尚未就绪"
                 extra_color = AMBER
             elif snap["unlock_offered"]:
-                extra_text = "当前屏幕：已锁定 · 解锁选项已就绪，请点击锁屏上的解锁按钮"
+                lock_check = snap.get("lock_check")
+                if lock_check == STATE_NEAR:
+                    extra_text = "当前屏幕：已锁定 · 解锁按钮已就绪，点击时会再次检测手机"
+                elif lock_check == STATE_AWAY:
+                    extra_text = "当前屏幕：已锁定 · 手机不在附近，点击解锁会重新检测"
+                else:
+                    extra_text = "当前屏幕：已锁定 · 解锁按钮已就绪，点击时检测手机"
                 extra_color = GREEN
-            elif state == STATE_NEAR:
-                extra_text = "当前屏幕：已锁定 · 正在准备解锁选项…"
-                extra_color = MUTED
-            elif state == STATE_AWAY:
-                extra_text = "当前屏幕：已锁定 · 手机已离开，靠近后可点击解锁"
-                extra_color = MUTED
             else:
-                extra_text = "当前屏幕：已锁定 · 正在确认手机状态"
+                extra_text = "当前屏幕：已锁定 · 正在准备解锁按钮…"
                 extra_color = MUTED
         else:
             extra_text = "当前屏幕：已解锁" + (" · 远程桌面" if remote else "")
@@ -795,7 +811,7 @@ class PasswordDialog(ctk.CTkToplevel):
         ).pack(fill="x")
         ctk.CTkLabel(
             frame,
-            text=f"账户：{credential.account_name()}。请填写 Windows 账户密码，不是 PIN，也不是 Windows Hello。密码会用 DPAPI 加密保存在本机，仅在锁屏界面点击手机解锁时提交。",
+            text=f"账户：{credential.account_name()}。请填写 Windows 账户密码，不是 PIN，也不是 Windows Hello。密码会用 DPAPI 加密保存在本机，仅在锁屏点击手机解锁且检测到手机在附近时提交。",
             font=font_small,
             text_color=MUTED,
             anchor="w",
@@ -906,7 +922,7 @@ class AdvancedDialog(ctk.CTkToplevel):
         self._vars: dict[str, tk.DoubleVar] = {}
 
         self.title("高级设置")
-        self.geometry("560x540")
+        self.geometry("560x780")
         self.resizable(False, True)
         self.transient(master)
         self.grab_set()
@@ -918,11 +934,11 @@ class AdvancedDialog(ctk.CTkToplevel):
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=24, pady=20)
         ctk.CTkLabel(
-            frame, text="时间设置", font=font_title, text_color=TEXT, anchor="w"
+            frame, text="距离与时间", font=font_title, text_color=TEXT, anchor="w"
         ).pack(fill="x")
         ctk.CTkLabel(
             frame,
-            text="距离判定由应用自动完成，无需调整。修改保存后立即生效。",
+            text="信号越接近 0 越强；点击解锁时重新检测手机，达到阈值才提交密码。\n修改保存后立即生效。",
             font=font_small,
             text_color=MUTED,
             anchor="w",
@@ -934,8 +950,11 @@ class AdvancedDialog(ctk.CTkToplevel):
         scroll.pack(fill="both", expand=True)
         self._scroll = scroll
 
+        self._slider(scroll, "near_rssi", "靠近阈值", "平滑信号强于该值时视为靠近，点击解锁也按此判断", -100, -40, 60, "{:.0f} dBm")
+        self._slider(scroll, "far_rssi", "离开阈值", "平滑信号弱于该值时视为远离（需低于靠近阈值）", -110, -50, 60, "{:.0f} dBm")
+        self._slider(scroll, "away_timeout", "离开判定时间", "收不到广播多久后判定为离开；自动锁屏开启时至少 30 秒", 5, 120, 115, "{:.0f} 秒")
         self._slider(scroll, "lock_grace", "自动锁屏延迟", "手机离开确认后，等待多久再锁屏（需开启自动锁屏）", 0, 30, 30, "{:.0f} 秒")
-        self._slider(scroll, "unlock_delay", "解锁选项延迟", "锁屏后手机在附近时，等待多久显示解锁选项", 0, 10, 20, "{:.1f} 秒")
+        self._slider(scroll, "unlock_delay", "解锁选项显示延迟", "锁屏后等待多久显示手机解锁按钮（点击时检测手机）", 0, 10, 20, "{:.1f} 秒")
         self._phone_section(scroll)
 
         buttons = ctk.CTkFrame(frame, fg_color="transparent")
@@ -1031,6 +1050,9 @@ class AdvancedDialog(ctk.CTkToplevel):
 
     def _sync_labels(self) -> None:
         formats = {
+            "near_rssi": "{:.0f} dBm",
+            "far_rssi": "{:.0f} dBm",
+            "away_timeout": "{:.0f} 秒",
             "lock_grace": "{:.0f} 秒",
             "unlock_delay": "{:.1f} 秒",
         }
@@ -1100,6 +1122,9 @@ class AdvancedDialog(ctk.CTkToplevel):
 
     def _save(self) -> None:
         settings = self._settings
+        settings.near_rssi = int(round(self._vars["near_rssi"].get()))
+        settings.far_rssi = int(round(self._vars["far_rssi"].get()))
+        settings.away_timeout = int(round(self._vars["away_timeout"].get()))
         settings.lock_grace = int(round(self._vars["lock_grace"].get()))
         settings.unlock_delay = round(self._vars["unlock_delay"].get(), 1)
         settings.normalize()

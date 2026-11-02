@@ -23,6 +23,10 @@ public:
     // Clears pending credentials so the tile can no longer unlock.
     HRESULT OnClearCommand();
 
+    // Called by the pipe listener with the app's entry-time proximity result.
+    // Only changes the tile label; every click still re-verifies.
+    HRESULT OnStatusCommand(_In_ bool bNearby);
+
     // IUnknown
     IFACEMETHODIMP QueryInterface(_In_ REFIID riid, _Outptr_ void** ppv);
     IFACEMETHODIMP_(ULONG) AddRef();

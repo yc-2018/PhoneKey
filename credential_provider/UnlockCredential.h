@@ -32,6 +32,9 @@ public:
     // Called by the provider to clear auto-logon flag
     void ClearPendingCredentials();
 
+    // Called by the pipe listener with the app's entry-time proximity result
+    void SetNearby(_In_ bool bNearby);
+
     // Check if credentials are pending (set by pipe but not yet consumed)
     bool HasPendingCredentials() const;
 
@@ -96,6 +99,8 @@ private:
     WCHAR   _szPassword[256];
     WCHAR   _szDomain[256];
     bool    _bPendingCredentials;
+    bool    _bNearby;
+    bool    _bNearbyKnown;
     ULONGLONG _advisedTick;
 
     CRITICAL_SECTION _cs;

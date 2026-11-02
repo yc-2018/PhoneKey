@@ -12,13 +12,86 @@ typedef HRESULT (WINAPI* PFN_DllGetClassObject)(REFCLSID, REFIID, void**);
 typedef HRESULT (WINAPI* PFN_DllCanUnloadNow)();
 
 static const wchar_t* kPipe = L"\\\\.\\pipe\\CredentialProviderPipe";
+static const wchar_t* kVerifyPipe = L"\\\\.\\pipe\\PhoneKeyVerify";
 
 static int g_failures = 0;
+static volatile LONG g_verifyNear = 1;
+static HANDLE g_hVerifyStop = nullptr;
+static HANDLE g_hVerifyThread = nullptr;
 
 #define CHECK(cond, msg) do { \
     if (!(cond)) { printf("FAIL: %s\n", msg); ++g_failures; } \
     else { printf("ok: %s\n", msg); } \
 } while (0)
+
+static bool Contains(PCWSTR haystack, PCWSTR needle)
+{
+    return haystack != nullptr && wcsstr(haystack, needle) != nullptr;
+}
+
+// Minimal stand-in for the app's verification pipe. Requires the real
+// PhoneKey app (with its own verify server) to be stopped.
+static DWORD WINAPI VerifyServerProc(LPVOID)
+{
+    while (WaitForSingleObject(g_hVerifyStop, 0) != WAIT_OBJECT_0) {
+        HANDLE h = CreateNamedPipeW(
+            kVerifyPipe,
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+            1, 64, 64, 0, nullptr);
+        if (h == INVALID_HANDLE_VALUE) {
+            printf("mock verify pipe create failed: %lu\n", GetLastError());
+            Sleep(100);
+            continue;
+        }
+        BOOL connected = ConnectNamedPipe(h, nullptr);
+        if (!connected && GetLastError() != ERROR_PIPE_CONNECTED) {
+            CloseHandle(h);
+            continue;
+        }
+        char buffer[64] = {};
+        DWORD read = 0;
+        if (ReadFile(h, buffer, sizeof(buffer) - 1, &read, nullptr)) {
+            const char* response = "ERR";
+            if (read >= 6 && strncmp(buffer, "VERIFY", 6) == 0) {
+                bool bNear =
+                    InterlockedCompareExchange(&g_verifyNear, 1, 1) != 0;
+                response = bNear ? "OK" : "DENY";
+            }
+            DWORD written = 0;
+            WriteFile(h, response, (DWORD)strlen(response), &written, nullptr);
+            FlushFileBuffers(h);
+        }
+        DisconnectNamedPipe(h);
+        CloseHandle(h);
+    }
+    return 0;
+}
+
+static void StartVerifyServer()
+{
+    g_hVerifyStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_hVerifyThread = CreateThread(
+        nullptr, 0, VerifyServerProc, nullptr, 0, nullptr);
+    Sleep(100);
+}
+
+static void StopVerifyServer()
+{
+    if (!g_hVerifyStop) return;
+    SetEvent(g_hVerifyStop);
+    // Unblock ConnectNamedPipe with a throwaway client.
+    HANDLE h = CreateFileW(kVerifyPipe, GENERIC_READ | GENERIC_WRITE, 0,
+        nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (g_hVerifyThread) {
+        WaitForSingleObject(g_hVerifyThread, 3000);
+        CloseHandle(g_hVerifyThread);
+        g_hVerifyThread = nullptr;
+    }
+    CloseHandle(g_hVerifyStop);
+    g_hVerifyStop = nullptr;
+}
 
 static bool SendPipe(const char* cmd, char* response, DWORD responseSize)
 {
@@ -59,6 +132,7 @@ int main()
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    StartVerifyServer();
 
     HMODULE module = LoadLibraryW(L"UnlockProvider.dll");
     if (!module) {
@@ -132,21 +206,53 @@ int main()
     bool pipeOk = SendPipe("UNLOCK:.\\test:pw", reply, sizeof(reply));
     CHECK(pipeOk && strcmp(reply, "OK") == 0, "UNLOCK grant accepted");
 
+    char statusReply[256] = {};
+    pipeOk = SendPipe("STATUS:AWAY", statusReply, sizeof(statusReply));
+    CHECK(pipeOk && strcmp(statusReply, "OK") == 0, "STATUS:AWAY accepted");
+    PWSTR label = nullptr;
+    hr = credential->GetStringValue(UFI_LABEL, &label);
+    CHECK(SUCCEEDED(hr) && Contains(label, L"不在附近"), "away label shown");
+    CoTaskMemFree(label);
+
+    pipeOk = SendPipe("STATUS:NEAR", statusReply, sizeof(statusReply));
+    CHECK(pipeOk && strcmp(statusReply, "OK") == 0, "STATUS:NEAR accepted");
+    label = nullptr;
+    hr = credential->GetStringValue(UFI_LABEL, &label);
+    CHECK(SUCCEEDED(hr) && Contains(label, L"在附近"), "near label shown");
+    CoTaskMemFree(label);
+
     autoLogon = TRUE;
     credential->SetSelected(&autoLogon);
     CHECK(autoLogon == FALSE, "lock-screen startup selection does not submit");
 
     Sleep(1700);
 
+    // Click while the phone is away: the app's verify server says DENY,
+    // so no credential may reach LSA and the pending offer stays for retry.
+    InterlockedExchange(&g_verifyNear, 0);
     autoLogon = FALSE;
     credential->SetSelected(&autoLogon);
-    CHECK(autoLogon == TRUE, "user click after grant unlocks directly");
+    CHECK(autoLogon == TRUE, "user click after grant attempts submit");
 
     response = (CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE)-1;
     statusText = nullptr;
     hr = credential->GetSerialization(&response, &serialization, &statusText, &statusIcon);
-    CHECK(SUCCEEDED(hr), "GetSerialization with grant returns S_OK");
-    CHECK(response == CPGSR_RETURN_CREDENTIAL_FINISHED, "click after grant serializes credentials");
+    CHECK(SUCCEEDED(hr), "GetSerialization with phone away returns S_OK");
+    CHECK(response == CPGSR_NO_CREDENTIAL_NOT_FINISHED, "phone away denies serialization");
+    CHECK(statusText != nullptr && Contains(statusText, L"不在附近"), "phone away warning text");
+    CoTaskMemFree(statusText);
+
+    // Pending survives the denial, so a retry works once the phone is near.
+    InterlockedExchange(&g_verifyNear, 1);
+    autoLogon = FALSE;
+    credential->SetSelected(&autoLogon);
+    CHECK(autoLogon == TRUE, "retry click submits after denial");
+
+    response = (CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE)-1;
+    statusText = nullptr;
+    hr = credential->GetSerialization(&response, &serialization, &statusText, &statusIcon);
+    CHECK(SUCCEEDED(hr), "GetSerialization with phone nearby returns S_OK");
+    CHECK(response == CPGSR_RETURN_CREDENTIAL_FINISHED, "nearby click serializes credentials");
     CHECK(serialization.cbSerialization > 0, "serialization buffer present");
     CoTaskMemFree(statusText);
     if (serialization.rgbSerialization) CoTaskMemFree(serialization.rgbSerialization);
@@ -170,6 +276,7 @@ int main()
     credential->Release();
     provider->Release();
     factory->Release();
+    StopVerifyServer();
 
     hr = canUnloadNow();
     CHECK(hr == S_OK, "DllCanUnloadNow reports unloadable");

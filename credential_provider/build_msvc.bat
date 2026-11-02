@@ -34,13 +34,13 @@ echo [BUILD] Compiling credential provider...
 cl.exe /nologo /W4 /WX- /EHsc /MT /O2 /utf-8 /DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE ^
     /DNTDDI_VERSION=0x0A000000 /D_WIN32_WINNT=0x0A00 ^
     /c Dll.cpp ClassFactory.cpp UnlockProvider.cpp UnlockCredential.cpp ^
-    PipeListener.cpp helpers.cpp /Fo:build\
+    PipeListener.cpp PresenceCheck.cpp helpers.cpp /Fo:build\
 if errorlevel 1 exit /b 1
 
 echo [BUILD] Linking UnlockProvider.dll...
 link.exe /nologo /DLL /OUT:build\UnlockProvider.dll /DEF:UnlockProvider.def ^
     build\Dll.obj build\ClassFactory.obj build\UnlockProvider.obj ^
-    build\UnlockCredential.obj build\PipeListener.obj build\helpers.obj ^
+    build\UnlockCredential.obj build\PipeListener.obj build\PresenceCheck.obj build\helpers.obj ^
     ole32.lib advapi32.lib secur32.lib user32.lib kernel32.lib ^
     uuid.lib shlwapi.lib
 if errorlevel 1 exit /b 1

@@ -62,9 +62,10 @@ def demo_snapshot():
         "paused": False,
         "has_password": True,
         "cp_installed": True,
-        "last_action": "手机在附近 · 请在锁屏界面点击解锁",
+        "last_action": "已提供手机解锁选项 · 点击时检测手机",
         "last_error": "",
         "unlock_offered": True,
+        "lock_check": STATE_NEAR,
     }
 
 
@@ -91,7 +92,7 @@ with patch.object(ui_module.credential, "account_name", return_value="示例账�
     capture(app, "unlock-settings.png")
 
     dialog = AdvancedDialog(app, settings, lambda: None, lambda: None)
-    dialog.geometry("560x620+100+20")
+    dialog.geometry("560x780+100+20")
     pump(0.6)
     capture(dialog, "advanced-settings.png")
     dialog.destroy()

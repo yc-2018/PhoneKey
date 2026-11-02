@@ -194,8 +194,23 @@ DWORD CPipeListener::_ThreadProc()
         // Parse the command
         char szResponse[64] = "ERR:INVALID_CMD";
 
+        // Entry-time proximity result from the app, used only for the label.
+        if (cbRead >= 10 && strncmp(szBuffer, "STATUS:", 7) == 0) {
+            bool bNearby = strncmp(szBuffer + 7, "NEAR", 4) == 0;
+            if (_pProvider) {
+                HRESULT hr = _pProvider->OnStatusCommand(bNearby);
+                StringCchCopyA(
+                    szResponse,
+                    ARRAYSIZE(szResponse),
+                    SUCCEEDED(hr) ? "OK" : "ERR:PROVIDER_FAILED");
+                DbgLog(L"[PipeListener] Presence status near=%d: hr=0x%08X\n",
+                    bNearby ? 1 : 0, hr);
+            } else {
+                StringCchCopyA(szResponse, ARRAYSIZE(szResponse), "ERR:NO_PROVIDER");
+            }
+        }
         // Clear pending credentials when the phone is no longer nearby.
-        if (cbRead >= 5 && strncmp(szBuffer, "CLEAR", 5) == 0) {
+        else if (cbRead >= 5 && strncmp(szBuffer, "CLEAR", 5) == 0) {
             if (_pProvider) {
                 HRESULT hr = _pProvider->OnClearCommand();
                 StringCchCopyA(

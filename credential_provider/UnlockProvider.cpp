@@ -159,6 +159,27 @@ HRESULT CUnlockProvider::OnClearCommand()
     return S_OK;
 }
 
+HRESULT CUnlockProvider::OnStatusCommand(_In_ bool bNearby)
+{
+    DbgLog(L"[UnlockProvider] OnStatusCommand: near=%d\n", bNearby ? 1 : 0);
+
+    EnterCriticalSection(&_cs);
+    if (_pCredential) {
+        _pCredential->SetNearby(bNearby);
+    }
+    LeaveCriticalSection(&_cs);
+
+    if (_hWnd) {
+        PostMessageW(_hWnd, WM_UNLOCK_CREDENTIAL, 0, 0);
+    } else {
+        EnterCriticalSection(&_cs);
+        _bCredentialsChangedPending = true;
+        LeaveCriticalSection(&_cs);
+    }
+
+    return S_OK;
+}
+
 // -----------------------------------------------------------------------
 // _FireCredentialsChanged - always called on the STA thread
 // -----------------------------------------------------------------------

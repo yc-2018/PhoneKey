@@ -195,3 +195,11 @@ def clear_pending(connect_timeout: float = 0.6) -> tuple[bool, str]:
     """Withdraw the unlock offer held by the credential provider."""
     response = _send_once(b"CLEAR", connect_timeout=connect_timeout)
     return response.strip() == "OK", response
+
+
+def send_presence_status(
+    near: bool, connect_timeout: float = 0.8
+) -> tuple[bool, str]:
+    payload = b"STATUS:NEAR" if near else b"STATUS:AWAY"
+    response = _send_once(payload, connect_timeout=connect_timeout)
+    return response.strip() == "OK", response

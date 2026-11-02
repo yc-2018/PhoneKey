@@ -30,6 +30,12 @@ PHONE_NEAR_SEEN_WINDOW = 15.0
 PHONE_RESET_EMA_GAP = 25.0
 PHONE_BIND_WINDOW = 10.0
 PHONE_MIN_AWAY_TIMEOUT = 30.0
+VERIFY_FRESH_WINDOW = 6.0
+# Phones using the system broadcast advertise roughly every 15 seconds; a
+# click often lands between advertisements, so phone mode accepts one full
+# advertisement cycle while the app beacon stays at the tighter window.
+VERIFY_PHONE_FRESH_WINDOW = 16.0
+VERIFY_TIMEOUT = 2.5
 
 StateCallback = Callable[[str, str], None]
 
@@ -40,6 +46,7 @@ class PresenceMonitor:
         self._on_change = on_change
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._restart = threading.Event()
         self._thread: threading.Thread | None = None
 
         self._state = STATE_UNKNOWN
@@ -98,6 +105,44 @@ class PresenceMonitor:
     def rebind(self) -> None:
         self.reset()
 
+    def refresh(self) -> None:
+        self.reset()
+        self._restart.set()
+        if not self._thread or not self._thread.is_alive():
+            self.start()
+
+    def check_near(self, max_age: float | None = None) -> bool:
+        settings = self._settings_provider()
+        phone_mode = settings.phone_adv_enabled
+        bound = bool(settings.phone_adv_prefix or settings.phone_adv_address)
+        if phone_mode and not bound:
+            # No phone identified yet: never treat an unrelated beacon as key.
+            return False
+        if max_age is None:
+            max_age = (
+                VERIFY_PHONE_FRESH_WINDOW if phone_mode else VERIFY_FRESH_WINDOW
+            )
+        with self._lock:
+            if not self._scanning:
+                return False
+            last = self._last_phone if bound else self._last_seen
+            ema = self._ema
+            now = time.monotonic()
+        if last is None or ema is None:
+            return False
+        return now - last <= max_age and ema >= settings.near_rssi
+
+    def verify_near(self, timeout: float = VERIFY_TIMEOUT) -> bool:
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.check_near():
+                return True
+            with self._lock:
+                scanning = self._scanning
+            if not scanning or time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+
     def snapshot(self) -> dict:
         settings = self._settings_provider()
         with self._lock:
@@ -125,9 +170,13 @@ class PresenceMonitor:
             asyncio.run(self._main())
         except Exception:
             log.exception("BLE 扫描线程异常退出")
+        finally:
+            self._set_scanning(False, None)
+            log.info("BLE 扫描线程已结束")
 
     async def _main(self) -> None:
         while not self._stop.is_set():
+            self._restart.clear()
             scanner = None
             try:
                 scanner = BleakScanner(detection_callback=self._on_advertisement)
@@ -138,19 +187,29 @@ class PresenceMonitor:
                 await asyncio.sleep(5)
                 continue
             self._set_scanning(True, None)
+            log.info("BLE 扫描已启动")
             try:
-                while not self._stop.is_set():
+                while not self._stop.is_set() and not self._restart.is_set():
                     await asyncio.sleep(0.5)
                     try:
                         self._tick()
                     except Exception:
                         log.exception("计算手机距离状态失败")
+            except asyncio.CancelledError:
+                log.warning("BLE 扫描被取消")
+                raise
+            except Exception:
+                log.exception("BLE 扫描异常，准备重启")
+                await asyncio.sleep(1)
             finally:
                 try:
                     await scanner.stop()
                 except Exception as exc:
                     log.warning("停止 BLE 扫描失败：%s", exc)
                 self._set_scanning(False, None)
+                log.info("BLE 扫描已停止")
+            if self._restart.is_set() and not self._stop.is_set():
+                log.info("正在重新启动 BLE 扫描")
 
     def _set_scanning(self, scanning: bool, error: str | None) -> None:
         with self._lock:
@@ -204,13 +263,14 @@ class PresenceMonitor:
                 continue
             payload_hex = payload.hex()
             name = self._extract_name(payload)
-            if (
-                settings.phone_adv_prefix
-                and payload_hex.startswith(settings.phone_adv_prefix)
-            ) or (
-                settings.phone_adv_address
-                and address == settings.phone_adv_address
-            ):
+            if settings.phone_adv_prefix:
+                if payload_hex.startswith(settings.phone_adv_prefix):
+                    return "phone", payload_hex, address, name
+                # Phones can keep advertising a different frame (e.g. offline
+                # finding) after Bluetooth is turned off; only the bound frame
+                # counts as the normal system broadcast.
+                return None
+            if settings.phone_adv_address and address == settings.phone_adv_address:
                 return "phone", payload_hex, address, name
             return "candidate", payload_hex, address, name
         return None
@@ -304,7 +364,12 @@ class PresenceMonitor:
             else:
                 near_window = PHONE_NEAR_SEEN_WINDOW
                 near_confirm = max(settings.near_confirm, 2.0)
-                away_timeout = max(settings.away_timeout, PHONE_MIN_AWAY_TIMEOUT)
+                # Auto-lock needs a longer gap so brief advertisement pauses do not lock the PC.
+                away_timeout = (
+                    max(settings.away_timeout, PHONE_MIN_AWAY_TIMEOUT)
+                    if settings.auto_lock
+                    else settings.away_timeout
+                )
 
             ema = self._ema
             last_seen = self._last_seen

@@ -22,7 +22,7 @@ COMMON=(
 LIBS=(-lole32 -ladvapi32 -lsecur32 -lshlwapi -luser32 -lkernel32 -luuid)
 
 for src in Dll.cpp ClassFactory.cpp UnlockProvider.cpp UnlockCredential.cpp \
-           PipeListener.cpp helpers.cpp mingw/cp_guids.cpp; do
+           PipeListener.cpp PresenceCheck.cpp helpers.cpp mingw/cp_guids.cpp; do
     obj="build/$(basename "${src%.cpp}").o"
     echo "[BUILD] ${src}"
     "$CXX" "${COMMON[@]}" -c "$src" -o "$obj"

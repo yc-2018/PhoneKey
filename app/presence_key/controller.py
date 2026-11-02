@@ -7,7 +7,9 @@ import time
 
 from . import credential, lockstate, secret, unlock
 from .config import Settings, save_settings
+from .power import ResumeWatcher
 from .presence import STATE_AWAY, STATE_NEAR, STATE_UNKNOWN, PresenceMonitor
+from .verify_pipe import PresenceVerifyServer
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +28,8 @@ class Controller:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._presence = PresenceMonitor(lambda: self.settings, self._on_presence_change)
+        self._verify_server = PresenceVerifyServer(self._presence)
+        self._resume = ResumeWatcher(self._on_resume)
         self._events: queue.Queue[tuple[str, bool | str]] = queue.Queue()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -34,6 +38,7 @@ class Controller:
         self._locked = lockstate.is_locked()
         self._remote = lockstate.is_remote_session()
         self._presence_state = STATE_UNKNOWN
+        self._lock_check: str | None = None
         self._pending_lock_at: float | None = None
         self._offer_at: float | None = None
         self._offered = False
@@ -42,9 +47,12 @@ class Controller:
         self._last_error = ""
         self._cp_checked = 0.0
         self._cp_value = False
+        self._last_resume = 0.0
 
     def start(self) -> None:
         self._presence.start()
+        self._verify_server.start()
+        self._resume.start()
         for target, name in (
             (self._lock_loop, "lock-monitor"),
             (self._work_loop, "auto-controller"),
@@ -56,6 +64,8 @@ class Controller:
     def stop(self) -> None:
         self._stop.set()
         self._withdraw_offer("应用退出")
+        self._resume.stop()
+        self._verify_server.stop()
         self._presence.stop()
         for thread in self._threads:
             thread.join(timeout=3)
@@ -108,6 +118,31 @@ class Controller:
             self._last_action = "正在重新识别手机广播…"
         log.info("已清除手机广播绑定，开始重新识别")
 
+    def refresh_presence(self) -> None:
+        self._withdraw_offer("手动刷新")
+        self._presence.refresh()
+        with self._lock:
+            self._last_action = "正在重新检测手机…"
+            self._last_error = ""
+        log.info("手动刷新手机检测")
+
+    def _on_resume(self) -> None:
+        if self._stop.is_set():
+            return
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last_resume < 5.0:
+                return
+            self._last_resume = now
+        log.info("系统已从睡眠/休眠恢复，重新启动 BLE 扫描")
+        self._presence.refresh()
+        with self._lock:
+            self._offered = False
+            self._offer_at = None
+            self._offer_failures = 0
+            self._last_action = "系统已唤醒，正在重新连接锁屏界面…"
+            self._last_error = ""
+
     def snapshot(self) -> dict:
         presence = self._presence.snapshot()
         with self._lock:
@@ -116,6 +151,7 @@ class Controller:
             action = self._last_action
             error = self._last_error
             offered = self._offered
+            lock_check = self._lock_check
         return {
             "presence": presence,
             "locked": locked,
@@ -126,6 +162,7 @@ class Controller:
             "last_action": action,
             "last_error": error,
             "unlock_offered": offered,
+            "lock_check": lock_check,
         }
 
     def _set_error(self, message: str) -> None:
@@ -171,12 +208,11 @@ class Controller:
                 if value == STATE_NEAR:
                     self._pending_lock_at = None
                     if self._locked and self.settings.click_unlock:
-                        self._last_action = "手机在附近 · 正在准备锁屏解锁选项"
+                        self._last_action = "手机在附近 · 点击解锁时仍需检测"
                 elif value == STATE_AWAY:
                     self._pending_lock_at = None
-                    self._offer_at = None
-                    if self._locked:
-                        self._last_action = "手机已离开 · 锁屏解锁选项不可用"
+                    if self._locked and self.settings.click_unlock:
+                        self._last_action = "手机已离开 · 点击解锁时会重新检测"
             elif kind == "locked":
                 locked = bool(value)
                 if locked == self._locked:
@@ -185,12 +221,16 @@ class Controller:
                 self._pending_lock_at = None
                 self._offer_at = None
                 if locked:
+                    near = self._presence.check_near()
+                    self._lock_check = STATE_NEAR if near else STATE_AWAY
                     self._last_action = "屏幕已锁定"
                     log.info(
-                        "检测到锁屏（手机状态：%s）",
+                        "进入锁屏，检测手机：%s（手机状态：%s）",
+                        "在附近" if near else "不在附近",
                         PRESENCE_TEXT.get(self._presence_state, self._presence_state),
                     )
                 else:
+                    self._lock_check = None
                     self._last_action = "屏幕已解锁"
                     self._last_error = ""
                     log.info("检测到解锁")
@@ -210,6 +250,8 @@ class Controller:
         action: str | None = None
 
         with self._lock:
+            scan_ok = bool(presence.get("scanning")) and not presence.get("error")
+
             active = not settings.paused and not self._remote
             if not active:
                 self._pending_lock_at = None
@@ -219,6 +261,7 @@ class Controller:
             else:
                 if (
                     settings.auto_lock
+                    and scan_ok
                     and not self._locked
                     and presence["state"] == STATE_AWAY
                     and presence["seen_since_start"]
@@ -226,7 +269,9 @@ class Controller:
                     if self._pending_lock_at is None:
                         self._pending_lock_at = now + settings.lock_grace
                 elif self._pending_lock_at is not None and (
-                    self._locked or presence["state"] != STATE_AWAY
+                    self._locked
+                    or presence["state"] != STATE_AWAY
+                    or not scan_ok
                 ):
                     self._pending_lock_at = None
 
@@ -237,7 +282,6 @@ class Controller:
                 ready = (
                     settings.click_unlock
                     and self._locked
-                    and presence["state"] == STATE_NEAR
                     and secret.has_secret()
                     and self.cp_installed()
                 )
@@ -266,7 +310,7 @@ class Controller:
         elif action == "offer":
             self._offer_unlock()
         elif action == "withdraw":
-            self._withdraw_offer("手机已离开或自动操作已关闭")
+            self._withdraw_offer("自动操作已关闭")
 
     def _offer_unlock(self) -> None:
         password = secret.load_secret()
@@ -277,6 +321,19 @@ class Controller:
             return
         username = credential.account_name()
         domain = credential.account_domain()
+        with self._lock:
+            lock_check = self._lock_check
+        if lock_check is None:
+            lock_check = STATE_NEAR if self._presence.check_near() else STATE_AWAY
+            with self._lock:
+                self._lock_check = lock_check
+        try:
+            unlock.send_presence_status(
+                lock_check == STATE_NEAR,
+                connect_timeout=OFFER_CONNECT_TIMEOUT,
+            )
+        except unlock.UnlockError as exc:
+            log.info("同步手机状态到锁屏界面失败：%s", exc)
         try:
             ok, response = unlock.send_unlock(
                 username,
@@ -314,15 +371,14 @@ class Controller:
                 and not self.settings.paused
                 and not self._remote
                 and self._locked
-                and self._presence_state == STATE_NEAR
             )
             if still_ready:
-                self._last_action = "手机在附近 · 请在锁屏界面点击解锁"
+                self._last_action = "已提供手机解锁选项 · 点击时检测手机"
                 self._last_error = ""
         if not still_ready:
             self._withdraw_offer("状态已变化")
             return
-        log.info("已向锁屏界面提供解锁选项，等待用户点击确认")
+        log.info("已向锁屏界面提供手机解锁选项，点击时检测手机并解锁")
 
     def _withdraw_offer(self, reason: str) -> None:
         with self._lock:

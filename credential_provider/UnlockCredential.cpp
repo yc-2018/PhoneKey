@@ -7,6 +7,7 @@
 #include <strsafe.h>
 
 #include "UnlockCredential.h"
+#include "PresenceCheck.h"
 #include "guid.h"
 #include "helpers.h"
 
@@ -26,6 +27,10 @@ static void DbgLog(PCWSTR fmt, ...)
 // Windows may restore the last used provider when the lock screen appears.
 // Selections made that early must not submit credentials on their own.
 static const ULONGLONG AUTO_LOGON_GUARD_MS = 1500;
+
+// Give the app enough time to gather a fresh BLE advertisement (its own
+// verification deadline is 2.5s) while still answering LogonUI promptly.
+static const DWORD PRESENCE_VERIFY_TIMEOUT_MS = 3200;
 
 // Static field descriptors
 static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_rgFieldDescriptors[UFI_NUM_FIELDS] = {
@@ -53,6 +58,8 @@ CUnlockCredential::CUnlockCredential() :
     _ulAuthPackage(0),
     _bAuthPackageValid(false),
     _bPendingCredentials(false),
+    _bNearby(false),
+    _bNearbyKnown(false),
     _advisedTick(0)
 {
     InterlockedIncrement(&g_cRef);
@@ -107,6 +114,16 @@ void CUnlockCredential::ClearPendingCredentials()
     _bPendingCredentials = false;
     SecureZeroMemory(_szPassword, sizeof(_szPassword));
     DbgLog(L"[Credential] ClearPendingCredentials\n");
+    LeaveCriticalSection(&_cs);
+}
+
+void CUnlockCredential::SetNearby(_In_ bool bNearby)
+{
+    EnterCriticalSection(&_cs);
+    _bNearby = bNearby;
+    _bNearbyKnown = true;
+    DbgLog(L"[Credential] SetNearby: near=%d pending=%d\n",
+        bNearby ? 1 : 0, _bPendingCredentials ? 1 : 0);
     LeaveCriticalSection(&_cs);
 }
 
@@ -222,12 +239,24 @@ HRESULT CUnlockCredential::GetStringValue(
     switch (dwFieldID) {
     case UFI_LABEL: {
         bool pending;
+        bool nearby;
+        bool known;
         EnterCriticalSection(&_cs);
         pending = _bPendingCredentials;
+        nearby = _bNearby;
+        known = _bNearbyKnown;
         LeaveCriticalSection(&_cs);
-        hr = SHStrDupW(
-            pending ? L"手机在附近 · 点击解锁" : L"手机感应解锁（等待手机靠近）",
-            ppwsz);
+        PCWSTR pszLabel;
+        if (!pending) {
+            pszLabel = L"手机感应解锁（等待应用就绪）";
+        } else if (!known) {
+            pszLabel = L"点击检测手机并解锁";
+        } else {
+            pszLabel = nearby
+                ? L"手机在附近 · 点击解锁"
+                : L"手机不在附近 · 点击后重新检测";
+        }
+        hr = SHStrDupW(pszLabel, ppwsz);
         break;
     }
     case UFI_USERNAME: {
@@ -351,26 +380,52 @@ HRESULT CUnlockCredential::GetSerialization(
     }
 
     EnterCriticalSection(&_cs);
-
-    // Copy credentials to local stack buffers
-    WCHAR szDomain[256];
-    WCHAR szUsername[256];
-    WCHAR szPassword[256];
-    StringCchCopyW(szDomain, ARRAYSIZE(szDomain), _szDomain);
-    StringCchCopyW(szUsername, ARRAYSIZE(szUsername), _szUsername);
-    StringCchCopyW(szPassword, ARRAYSIZE(szPassword), _szPassword);
     bool pending = _bPendingCredentials;
-
     LeaveCriticalSection(&_cs);
 
     if (!pending) {
-        // Proximity grant is missing or was withdrawn by the app. Submit
-        // arrows clicked in this state must not reach LSA.
-        SecureZeroMemory(szPassword, sizeof(szPassword));
-        *pcpgsr = CPGSR_NO_CREDENTIAL_NOT_FINISHED;
+        // No grant from the app. Submit arrows clicked in this state must
+        // not reach LSA.
         *pcpsiOptionalStatusIcon = CPSI_WARNING;
-        SHStrDupW(L"手机不在附近，请使用 PIN 或等待手机靠近", ppwszOptionalStatusText);
+        SHStrDupW(L"手机解锁尚未就绪，请使用 PIN 或稍后重试", ppwszOptionalStatusText);
         DbgLog(L"[Credential] GetSerialization: no pending credentials\n");
+        return S_OK;
+    }
+
+    // Click-time proximity check. The app only answers OK from a fresh BLE
+    // observation; every pipe error or timeout fails closed.
+    if (!IsPhoneNearby(PRESENCE_VERIFY_TIMEOUT_MS)) {
+        EnterCriticalSection(&_cs);
+        _bNearby = false;
+        _bNearbyKnown = true;
+        LeaveCriticalSection(&_cs);
+        *pcpsiOptionalStatusIcon = CPSI_WARNING;
+        SHStrDupW(L"手机不在附近，请靠近后重试或使用 PIN", ppwszOptionalStatusText);
+        DbgLog(L"[Credential] GetSerialization: phone not nearby, pending kept\n");
+        return S_OK;
+    }
+
+    // Re-check under the lock: the app may have withdrawn the offer while
+    // the verification was in flight.
+    WCHAR szDomain[256];
+    WCHAR szUsername[256];
+    WCHAR szPassword[256];
+    EnterCriticalSection(&_cs);
+    pending = _bPendingCredentials;
+    if (pending) {
+        _bNearby = true;
+        _bNearbyKnown = true;
+        StringCchCopyW(szDomain, ARRAYSIZE(szDomain), _szDomain);
+        StringCchCopyW(szUsername, ARRAYSIZE(szUsername), _szUsername);
+        StringCchCopyW(szPassword, ARRAYSIZE(szPassword), _szPassword);
+    }
+    LeaveCriticalSection(&_cs);
+
+    if (!pending) {
+        SecureZeroMemory(szPassword, sizeof(szPassword));
+        *pcpsiOptionalStatusIcon = CPSI_WARNING;
+        SHStrDupW(L"手机解锁选项已撤销，请使用 PIN 或重新锁屏", ppwszOptionalStatusText);
+        DbgLog(L"[Credential] GetSerialization: offer withdrawn during verify\n");
         return S_OK;
     }
 
@@ -379,7 +434,8 @@ HRESULT CUnlockCredential::GetSerialization(
         StringCchCopyW(szDomain, ARRAYSIZE(szDomain), L".");
     }
 
-    DbgLog(L"[Credential] Serializing: domain=%s user=%s cpus=%d\n", szDomain, szUsername, (int)_cpus);
+    DbgLog(L"[Credential] Serializing after nearby check: domain=%s user=%s cpus=%d\n",
+        szDomain, szUsername, (int)_cpus);
 
     // Initialize the KERB structure
     KERB_INTERACTIVE_UNLOCK_LOGON kiul;
