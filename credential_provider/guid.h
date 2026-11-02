@@ -1,0 +1,8 @@
+#pragma once
+
+#include <guiddef.h>
+
+// {E0A8C5B2-9F3D-4E7A-B1C6-8D2F5A3E9B70}
+DEFINE_GUID(CLSID_UnlockProvider,
+    0xe0a8c5b2, 0x9f3d, 0x4e7a,
+    0xb1, 0xc6, 0x8d, 0x2f, 0x5a, 0x3e, 0x9b, 0x70);

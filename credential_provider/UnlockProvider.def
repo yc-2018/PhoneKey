@@ -1,0 +1,4 @@
+LIBRARY "UnlockProvider"
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# PyInstaller
+build/
+dist/
+
+# Credential provider build output
+credential_provider/build/
+credential_provider/sdkinc/
+installer/UnlockProvider.dll
+
+# Runtime logs and local screenshots
+*.log
+tools/*.png
+
+# Local references, obsolete experiments, toolchains
+refs/
+android/
+toolchain/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
