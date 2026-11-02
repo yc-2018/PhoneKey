@@ -209,7 +209,7 @@ class MainWindow(ctk.CTk):
         self._switch_row(
             inner,
             "锁屏点击解锁",
-            "手机在附近时，锁屏界面出现解锁选项；必须在锁屏上点击后才提交已保存的密码",
+            "手机在附近时显示解锁选项，点击后才提交密码",
             self._click_unlock_var,
             self._on_click_unlock,
         )
@@ -251,7 +251,7 @@ class MainWindow(ctk.CTk):
         ).pack(side="left", padx=(10, 0))
         ctk.CTkLabel(
             inner,
-            text="安全提示：手机靠近只会在锁屏界面提供解锁选项，不会自动提交密码；必须点击锁屏上的解锁按钮才会解锁。",
+            text="手机靠近只会显示解锁选项，必须点击后才会解锁。",
             font=self._font_small,
             text_color=MUTED,
             anchor="w",
@@ -371,7 +371,7 @@ class MainWindow(ctk.CTk):
 
         ctk.CTkLabel(
             inner,
-            text="密码使用 Windows DPAPI 加密后保存在本机，不会写入配置或日志。安装组件需要管理员权限，会向 System32 写入 DLL 并注册到 Windows 锁屏界面。",
+            text="密码使用 Windows DPAPI 加密保存在本机，不写入配置或日志。安装组件需要管理员权限，会向 System32 写入 DLL 并注册到锁屏界面。",
             font=self._font_small,
             text_color=MUTED,
             anchor="w",
@@ -388,23 +388,6 @@ class MainWindow(ctk.CTk):
             self._autostart_var,
             self._on_autostart,
         )
-        self._divider(inner)
-        ctk.CTkLabel(
-            inner,
-            text="手机端",
-            font=self._font_body_bold,
-            text_color=TEXT,
-            anchor="w",
-        ).pack(fill="x")
-        ctk.CTkLabel(
-            inner,
-            text="手机无需安装 App：保持蓝牙开启即可，电脑会自动识别手机系统的广播。若识别不到，可在「高级设置」中重新绑定。手环仍照常连接手机，不受影响。",
-            font=self._font_small,
-            text_color=MUTED,
-            anchor="w",
-            justify="left",
-            wraplength=450,
-        ).pack(fill="x")
 
     def _build_footer(self) -> None:
         footer = ctk.CTkFrame(self, fg_color="transparent")
@@ -537,7 +520,7 @@ class MainWindow(ctk.CTk):
         remote = snap["remote"]
         state = presence["state"]
         source = snap.get("source")
-        source_label = "系统广播" if source == "phone" else ("App 信标" if source == "app" else "")
+        source_label = "手机广播" if source in ("phone", "app") else ""
         source_prefix = f"{source_label} · " if source_label else ""
         phone_bound = snap.get("phone_bound")
         phone_name = snap.get("phone_name") or "手机"
@@ -575,13 +558,11 @@ class MainWindow(ctk.CTk):
         elif snap.get("phone_adv_enabled", True):
             self._set_status(
                 "正在识别手机广播",
-                "保持手机蓝牙开启，无需安装 App；识别到后会自动绑定",
+                "保持手机蓝牙开启，识别到后会自动绑定",
                 MUTED,
             )
         else:
-            self._set_status(
-                "等待手机信标", "请在手机上开启「感应钥匙信标」并保持蓝牙开启", MUTED
-            )
+            self._set_status("等待手机广播", "请保持手机蓝牙开启", MUTED)
 
         if paused:
             extra_text = "已暂停"
@@ -925,7 +906,7 @@ class AdvancedDialog(ctk.CTkToplevel):
         self._vars: dict[str, tk.DoubleVar] = {}
 
         self.title("高级设置")
-        self.geometry("560x720")
+        self.geometry("560x540")
         self.resizable(False, True)
         self.transient(master)
         self.grab_set()
@@ -937,11 +918,11 @@ class AdvancedDialog(ctk.CTkToplevel):
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=24, pady=20)
         ctk.CTkLabel(
-            frame, text="距离与时间", font=font_title, text_color=TEXT, anchor="w"
+            frame, text="时间设置", font=font_title, text_color=TEXT, anchor="w"
         ).pack(fill="x")
         ctk.CTkLabel(
             frame,
-            text="dBm 越接近 0 信号越强（-50 很近，-90 较远）。修改保存后立即生效。",
+            text="距离判定由应用自动完成，无需调整。修改保存后立即生效。",
             font=font_small,
             text_color=MUTED,
             anchor="w",
@@ -951,13 +932,10 @@ class AdvancedDialog(ctk.CTkToplevel):
 
         scroll = ctk.CTkScrollableFrame(frame, fg_color="transparent", corner_radius=0)
         scroll.pack(fill="both", expand=True)
+        self._scroll = scroll
 
-        self._slider(scroll, "near_rssi", "靠近阈值", "信号强于该值视为靠近（越小越难触发）", -100, -40, 60, "{:.0f} dBm")
-        self._slider(scroll, "far_rssi", "离开阈值", "信号弱于该值视为远离（需小于靠近阈值）", -110, -50, 60, "{:.0f} dBm")
-        self._slider(scroll, "near_confirm", "靠近确认时间", "持续靠近多久才判定为在附近", 0.5, 10.0, 38, "{:.1f} 秒")
-        self._slider(scroll, "away_timeout", "离开判定时间", "收不到信标多久后判定为离开", 5, 120, 115, "{:.0f} 秒")
-        self._slider(scroll, "lock_grace", "锁屏延迟", "确认离开后等待多久再锁屏", 0, 30, 30, "{:.0f} 秒")
-        self._slider(scroll, "unlock_delay", "解锁选项延迟", "手机在附近时，锁屏后等待多久提供解锁选项", 0, 10, 20, "{:.1f} 秒")
+        self._slider(scroll, "lock_grace", "自动锁屏延迟", "手机离开确认后，等待多久再锁屏（需开启自动锁屏）", 0, 30, 30, "{:.0f} 秒")
+        self._slider(scroll, "unlock_delay", "解锁选项延迟", "锁屏后手机在附近时，等待多久显示解锁选项", 0, 10, 20, "{:.1f} 秒")
         self._phone_section(scroll)
 
         buttons = ctk.CTkFrame(frame, fg_color="transparent")
@@ -1035,19 +1013,24 @@ class AdvancedDialog(ctk.CTkToplevel):
             height=18,
         )
         slider.pack(fill="x", pady=(4, 0))
+        # CTkSlider changes its value on mouse wheel and CTkScrollableFrame ignores
+        # wheel events over sliders, so scroll the page ourselves.
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            slider._canvas.unbind(sequence)
+        slider._canvas.bind("<MouseWheel>", self._on_slider_wheel)
         self._labels[key] = value_label
         self._vars[key] = var
         self._labels[key].configure(text=fmt.format(getattr(self._settings, key)))
+
+    def _on_slider_wheel(self, event) -> str:
+        self._scroll._parent_canvas.yview_scroll(-int(event.delta / 6), "units")
+        return "break"
 
     def _update_label(self, key: str, value: float, fmt: str) -> None:
         self._labels[key].configure(text=fmt.format(value))
 
     def _sync_labels(self) -> None:
         formats = {
-            "near_rssi": "{:.0f} dBm",
-            "far_rssi": "{:.0f} dBm",
-            "near_confirm": "{:.1f} 秒",
-            "away_timeout": "{:.0f} 秒",
             "lock_grace": "{:.0f} 秒",
             "unlock_delay": "{:.1f} 秒",
         }
@@ -1058,17 +1041,15 @@ class AdvancedDialog(ctk.CTkToplevel):
         ctk.CTkFrame(parent, height=1, fg_color=LINE).pack(fill="x", pady=(8, 14))
         ctk.CTkLabel(
             parent,
-            text="手机广播（免 App）",
+            text="手机",
             font=("Microsoft YaHei UI", 14, "bold"),
             text_color=TEXT,
             anchor="w",
         ).pack(fill="x")
         if self._settings.phone_adv_prefix or self._settings.phone_adv_address:
             detail = f"已绑定「{self._settings.phone_adv_name or '未命名手机'}」"
-            if self._settings.phone_adv_address:
-                detail += f" · {self._settings.phone_adv_address}"
         else:
-            detail = "尚未绑定，应用会自动识别信号最强的手机系统广播。"
+            detail = "尚未绑定，应用会自动识别手机广播。"
         self._phone_status = ctk.CTkLabel(
             parent,
             text=detail,
@@ -1081,7 +1062,7 @@ class AdvancedDialog(ctk.CTkToplevel):
         self._phone_status.pack(fill="x", pady=(4, 0))
         ctk.CTkLabel(
             parent,
-            text="手机只需保持蓝牙开启，无需安装 App。免 App 模式下离开判定至少 30 秒、靠近确认至少 2 秒，避免系统广播间隔造成误锁。换手机或识别不到时，点下方按钮重新识别。",
+            text="保持手机蓝牙开启即可。识别不到或更换手机时，可重新绑定。",
             font=("Microsoft YaHei UI", 11),
             text_color=MUTED,
             anchor="w",
@@ -1090,8 +1071,8 @@ class AdvancedDialog(ctk.CTkToplevel):
         ).pack(fill="x", pady=(4, 0))
         self._rebind_btn = ctk.CTkButton(
             parent,
-            text="重新绑定手机广播",
-            width=150,
+            text="重新绑定手机",
+            width=130,
             height=32,
             corner_radius=8,
             fg_color="transparent",
@@ -1119,10 +1100,6 @@ class AdvancedDialog(ctk.CTkToplevel):
 
     def _save(self) -> None:
         settings = self._settings
-        settings.near_rssi = int(round(self._vars["near_rssi"].get()))
-        settings.far_rssi = int(round(self._vars["far_rssi"].get()))
-        settings.near_confirm = round(self._vars["near_confirm"].get(), 1)
-        settings.away_timeout = int(round(self._vars["away_timeout"].get()))
         settings.lock_grace = int(round(self._vars["lock_grace"].get()))
         settings.unlock_delay = round(self._vars["unlock_delay"].get(), 1)
         settings.normalize()

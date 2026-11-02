@@ -3,9 +3,19 @@
 用手机当作 Windows 电脑的感应钥匙。手机在附近时，锁屏界面会出现「手机感应解锁」
 选项；**只有点击它才会提交已保存的密码并解锁**。手机端不需要安装 App。
 
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/status.png" width="420" alt="主界面状态">
+  <img src="docs/images/unlock-settings.png" width="420" alt="解锁设置">
+</p>
+<p align="center">
+  <img src="docs/images/advanced-settings.png" width="420" alt="时间设置">
+</p>
+
 ## 功能
 
-- **手机作为钥匙**：扫描手机系统的 BLE 广播，无需在手机上安装任何应用。
+- **手机作为钥匙**：扫描手机系统的 BLE 广播，手机无需安装应用。
 - **点击确认解锁**：靠近只会在锁屏界面提供解锁选项，绝不会自动提交密码。
 - **启动防误触**：锁屏刚出现时，即使磁贴被 Windows 自动选中也不会解锁。
 - **离开自动锁屏**（可选开关）：手机离开确认后锁定电脑。
@@ -105,7 +115,7 @@ credential_provider/build_mingw.sh
 app/                  托盘应用、BLE 扫描、状态机、DPAPI 存储
 credential_provider/  Windows 凭证提供程序（C++）及测试
 installer/            凭证提供程序的安装 / 卸载 PowerShell 脚本
-tools/                离线状态机测试
+tools/                离线状态机测试与界面截图脚本
 PhoneKey.spec         PyInstaller 打包配置
 .github/workflows/    GitHub Actions 发行版工作流
 ```
