@@ -2,11 +2,39 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from .paths import settings_path
 
 log = logging.getLogger(__name__)
+
+MAX_DEVICES = 8
+
+
+@dataclass
+class DeviceBinding:
+    name: str = ""
+    address: str = ""
+    prefix: str = ""
+    kind: str = "phone"
+
+    def normalize(self) -> None:
+        self.name = str(self.name or "").strip()[:40]
+        self.address = _normalize_address(self.address)
+        self.prefix = _normalize_hex(self.prefix)
+        if self.prefix:
+            self.kind = "phone"
+        elif self.address:
+            self.kind = "ble"
+        else:
+            self.kind = ""
+
+    def key(self) -> str:
+        if self.prefix:
+            return "p:" + self.prefix
+        if self.address:
+            return "a:" + self.address
+        return ""
 
 
 @dataclass
@@ -22,9 +50,8 @@ class Settings:
     autostart: bool = False
     paused: bool = False
     phone_adv_enabled: bool = True
-    phone_adv_prefix: str = ""
-    phone_adv_address: str = ""
-    phone_adv_name: str = ""
+    device_policy: str = "any"
+    bound_devices: list[DeviceBinding] = field(default_factory=list)
 
     def normalize(self) -> None:
         self.auto_lock = bool(self.auto_lock)
@@ -32,9 +59,30 @@ class Settings:
         self.autostart = bool(self.autostart)
         self.paused = bool(self.paused)
         self.phone_adv_enabled = bool(self.phone_adv_enabled)
-        self.phone_adv_prefix = _normalize_hex(self.phone_adv_prefix)
-        self.phone_adv_address = _normalize_address(self.phone_adv_address)
-        self.phone_adv_name = str(self.phone_adv_name or "").strip()[:40]
+        self.device_policy = "all" if str(self.device_policy).lower() == "all" else "any"
+        devices: list[DeviceBinding] = []
+        seen: set[str] = set()
+        for item in self.bound_devices or []:
+            if isinstance(item, DeviceBinding):
+                binding = item
+            elif isinstance(item, dict):
+                binding = DeviceBinding(
+                    name=item.get("name", ""),
+                    address=item.get("address", ""),
+                    prefix=item.get("prefix", ""),
+                    kind=item.get("kind", ""),
+                )
+            else:
+                continue
+            binding.normalize()
+            key = binding.key()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            devices.append(binding)
+            if len(devices) >= MAX_DEVICES:
+                break
+        self.bound_devices = devices
         self.near_rssi = _clamp(self.near_rssi, -100, -40, -72, int)
         self.far_rssi = _clamp(self.far_rssi, -110, -50, -88, int)
         if self.far_rssi > self.near_rssi - 4:
@@ -84,6 +132,14 @@ def load_settings() -> Settings:
             for key, value in raw.items():
                 if hasattr(settings, key):
                     setattr(settings, key, value)
+            if not raw.get("bound_devices"):
+                prefix = _normalize_hex(raw.get("phone_adv_prefix"))
+                address = _normalize_address(raw.get("phone_adv_address"))
+                name = str(raw.get("phone_adv_name") or "").strip()[:40]
+                if prefix or address:
+                    settings.bound_devices = [
+                        DeviceBinding(name=name, address=address, prefix=prefix)
+                    ]
         except (OSError, ValueError) as exc:
             log.warning("读取配置失败，使用默认值: %s", exc)
     settings.normalize()

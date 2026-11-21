@@ -11,7 +11,7 @@ import customtkinter as ctk
 from PIL import Image
 
 from . import __version__, autostart, credential, cpsetup, secret
-from .config import DEFAULT_SETTINGS, save_settings
+from .config import DEFAULT_SETTINGS, MAX_DEVICES, DeviceBinding, save_settings
 from .paths import APP_TITLE, log_path, resource
 from .presence import STATE_AWAY, STATE_NEAR
 
@@ -181,7 +181,7 @@ class MainWindow(ctk.CTk):
         row = ctk.CTkFrame(inner, fg_color="transparent")
         row.pack(fill="x", pady=(10, 0))
         ctk.CTkLabel(
-            row, text="手机信号", font=self._font_small, text_color=MUTED, anchor="w"
+            row, text="信号强度", font=self._font_small, text_color=MUTED, anchor="w"
         ).pack(side="left")
         self._signal_value = ctk.CTkLabel(
             row, text="—", font=self._font_body_bold, text_color=TEXT
@@ -536,10 +536,15 @@ class MainWindow(ctk.CTk):
         remote = snap["remote"]
         state = presence["state"]
         source = presence.get("source")
-        source_label = "手机广播" if source in ("phone", "app") else ""
+        source_label = "设备广播" if source in ("phone", "app") else ""
         source_prefix = f"{source_label} · " if source_label else ""
         phone_bound = presence.get("phone_bound")
         phone_name = presence.get("phone_name") or "手机"
+        device_count = presence.get("device_count") or 0
+        device_policy = presence.get("device_policy") or "any"
+        condition = "全部在附近" if device_policy == "all" else "任一在附近"
+        devices = presence.get("devices") or []
+        present_count = sum(1 for device in devices if device.get("present"))
 
         if paused:
             self._set_status("已暂停", "自动锁屏与手机解锁已关闭，广播扫描仍在进行", MUTED)
@@ -554,11 +559,14 @@ class MainWindow(ctk.CTk):
         elif state == STATE_NEAR:
             rssi = presence["rssi"]
             age = presence["last_seen_age"] or 0
-            self._set_status(
-                "手机在附近",
-                f"{source_prefix}信号 {rssi} dBm · {age:.0f} 秒前收到广播",
-                GREEN,
-            )
+            if device_count > 1:
+                detail = (
+                    f"{source_prefix}{present_count}/{device_count} 台在附近 · "
+                    f"信号 {rssi} dBm · {age:.0f} 秒前收到广播"
+                )
+            else:
+                detail = f"{source_prefix}信号 {rssi} dBm · {age:.0f} 秒前收到广播"
+            self._set_status("手机在附近", detail, GREEN)
         elif state == STATE_AWAY:
             self._set_status("手机已离开", "已确认离开；在锁屏点击解锁时会重新检测", AMBER)
         elif presence["seen_since_start"]:
@@ -566,11 +574,14 @@ class MainWindow(ctk.CTk):
                 "正在判断距离…", f"{source_prefix}已检测到手机广播，正在确认远近", MUTED
             )
         elif phone_bound:
-            self._set_status(
-                "等待手机广播",
-                f"已绑定「{phone_name}」，请保持手机蓝牙开启",
-                MUTED,
-            )
+            if device_count > 1:
+                detail = (
+                    f"已绑定 {device_count} 台设备（{condition}），"
+                    "请保持设备蓝牙开启"
+                )
+            else:
+                detail = f"已绑定「{phone_name}」，请保持手机蓝牙开启"
+            self._set_status("等待手机广播", detail, MUTED)
         elif presence.get("phone_adv_enabled", True):
             self._set_status(
                 "正在识别手机广播",
@@ -622,9 +633,15 @@ class MainWindow(ctk.CTk):
             age = presence["last_seen_age"] or 0
             smoothed = presence["smoothed"]
             label = f"{source_label} · " if source_label else ""
-            note = f"{label}实时 {rssi} dBm · 平滑 {smoothed} dBm · {age:.1f} 秒前"
-            if presence["address"]:
-                note += f" · {presence['address']}"
+            if device_count > 1:
+                note = (
+                    f"{label}{present_count}/{device_count} 台在附近 · "
+                    f"最强 {rssi} dBm · {age:.1f} 秒前"
+                )
+            else:
+                note = f"{label}实时 {rssi} dBm · 平滑 {smoothed} dBm · {age:.1f} 秒前"
+                if presence["address"]:
+                    note += f" · {presence['address']}"
             note_color = MUTED
         self._signal_note.configure(text=note, text_color=note_color)
 
@@ -770,12 +787,7 @@ class MainWindow(ctk.CTk):
             )
 
     def _open_advanced(self) -> None:
-        AdvancedDialog(
-            self,
-            self.controller.settings,
-            self.refresh_now,
-            self.controller.rebind_phone,
-        )
+        AdvancedDialog(self, self.controller, self.refresh_now)
 
     def _open_logs(self) -> None:
         try:
@@ -912,12 +924,431 @@ class PasswordDialog(ctk.CTkToplevel):
             self._save_btn.configure(state="normal", text="保存并验证")
 
 
-class AdvancedDialog(ctk.CTkToplevel):
-    def __init__(self, master: MainWindow, settings, on_saved, on_rebind):
+class DevicePickerDialog(ctk.CTkToplevel):
+    SCAN_WAIT_MS = 4000
+    DISCOVERY_MAX_AGE = 20.0
+
+    def __init__(self, master, controller, on_saved):
         super().__init__(master)
-        self._settings = settings
+        self._controller = controller
+        self._settings = controller.settings
         self._on_saved = on_saved
-        self._on_rebind = on_rebind
+        self._rows: dict[str, dict] = {}
+        self._checked: set[str] = set()
+        self._row_vars: dict[str, tk.BooleanVar] = {}
+        self._scan_token = 0
+
+        self.title("选择解锁设备")
+        self.geometry("600x720")
+        self.minsize(560, 620)
+        self.resizable(False, True)
+        self.transient(master)
+        self.grab_set()
+
+        font_title = ctk.CTkFont(family="Microsoft YaHei UI", size=18, weight="bold")
+        font_body = ctk.CTkFont(family="Microsoft YaHei UI", size=13, weight="bold")
+        font_small = ctk.CTkFont(family="Microsoft YaHei UI", size=12)
+        font_note = ctk.CTkFont(family="Microsoft YaHei UI", size=11)
+
+        frame = ctk.CTkFrame(self, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=24, pady=18)
+        ctk.CTkLabel(
+            frame, text="选择解锁设备", font=font_title, text_color=TEXT, anchor="w"
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            frame,
+            text=f"勾选一台或多台会广播的 BLE 设备（最多 {MAX_DEVICES} 台）。被手机连接的手环、耳机通常不会广播。",
+            font=font_small,
+            text_color=MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=540,
+        ).pack(fill="x", pady=(4, 8))
+
+        head = ctk.CTkFrame(frame, fg_color="transparent")
+        head.pack(fill="x")
+        self._status = ctk.CTkLabel(
+            head,
+            text="正在扫描附近的 BLE 设备…",
+            font=font_note,
+            text_color=MUTED,
+            anchor="w",
+        )
+        self._status.pack(side="left")
+
+        self._scan_btn = ctk.CTkButton(
+            head,
+            text="重新扫描",
+            width=84,
+            height=28,
+            corner_radius=7,
+            fg_color=("gray88", "gray24"),
+            hover_color=("gray80", "gray30"),
+            text_color=TEXT,
+            font=font_note,
+            command=self._start_scan,
+        )
+        self._scan_btn.pack(side="right")
+
+        list_frame = ctk.CTkFrame(
+            frame, fg_color=("gray96", "gray18"), corner_radius=10
+        )
+        list_frame.pack(fill="both", expand=True, pady=(6, 8))
+        self._list = ctk.CTkScrollableFrame(
+            list_frame,
+            fg_color="transparent",
+            corner_radius=0,
+            scrollbar_button_color=("gray75", "gray35"),
+            scrollbar_button_hover_color=("gray65", "gray45"),
+        )
+        self._list.pack(fill="both", expand=True, padx=4, pady=4)
+
+        manual = ctk.CTkFrame(frame, fg_color="transparent")
+        manual.pack(fill="x")
+        self._manual = ctk.CTkEntry(
+            manual,
+            placeholder_text="手动输入 MAC，例如 AA:BB:CC:DD:EE:FF",
+            height=32,
+            font=font_small,
+        )
+        self._manual.pack(side="left", fill="x", expand=True)
+        self._manual.bind("<Return>", lambda event: self._add_manual())
+        ctk.CTkButton(
+            manual,
+            text="添加",
+            width=64,
+            height=32,
+            corner_radius=7,
+            fg_color="transparent",
+            border_width=1,
+            border_color=LINE,
+            hover_color=("gray90", "gray22"),
+            text_color=TEXT,
+            font=font_small,
+            command=self._add_manual,
+        ).pack(side="left", padx=(8, 0))
+        self._manual_note = ctk.CTkLabel(
+            frame, text="", font=font_note, text_color=RED, anchor="w"
+        )
+        self._manual_note.pack(fill="x")
+
+        policy = ctk.CTkFrame(frame, fg_color="transparent")
+        policy.pack(fill="x", pady=(6, 0))
+        ctk.CTkLabel(
+            policy,
+            text="解锁条件",
+            font=font_body,
+            text_color=TEXT,
+            anchor="w",
+        ).pack(fill="x")
+        self._policy = ctk.CTkSegmentedButton(
+            policy,
+            values=["任一设备在附近", "全部设备在附近"],
+            font=font_small,
+            selected_color=ACCENT,
+            selected_hover_color=ACCENT_HOVER,
+            unselected_color=("gray85", "gray25"),
+            unselected_hover_color=("gray75", "gray35"),
+            text_color=TEXT,
+        )
+        self._policy.set(
+            "全部设备在附近"
+            if self._settings.device_policy == "all"
+            else "任一设备在附近"
+        )
+        self._policy.pack(fill="x", pady=(4, 0))
+        ctk.CTkLabel(
+            policy,
+            text="任一：任意一台在附近即可解锁；全部：所有设备都在附近才能解锁。",
+            font=font_note,
+            text_color=MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=540,
+        ).pack(fill="x", pady=(2, 0))
+
+        buttons = ctk.CTkFrame(frame, fg_color="transparent")
+        buttons.pack(fill="x", pady=(10, 0))
+        ctk.CTkButton(
+            buttons,
+            text="恢复自动识别",
+            width=110,
+            height=32,
+            corner_radius=8,
+            fg_color="transparent",
+            border_width=1,
+            border_color=LINE,
+            hover_color=("gray90", "gray22"),
+            text_color=TEXT,
+            font=font_small,
+            command=self._auto_detect,
+        ).pack(side="left")
+        ctk.CTkButton(
+            buttons,
+            text="确定选择",
+            width=100,
+            height=32,
+            corner_radius=8,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            font=font_small,
+            command=self._confirm,
+        ).pack(side="right")
+        ctk.CTkButton(
+            buttons,
+            text="取消",
+            width=76,
+            height=32,
+            corner_radius=8,
+            fg_color=("gray85", "gray25"),
+            hover_color=("gray75", "gray35"),
+            text_color=TEXT,
+            font=font_small,
+            command=self.destroy,
+        ).pack(side="right", padx=(0, 10))
+
+        self._load_existing()
+        self._render()
+        self._start_scan()
+
+    def _load_existing(self) -> None:
+        for binding in self._settings.bound_devices:
+            identity = binding.key()
+            if not identity:
+                continue
+            self._rows[identity] = {
+                "identity": identity,
+                "name": binding.name or "未命名设备",
+                "address": binding.address,
+                "prefix": binding.prefix,
+                "kind": binding.kind,
+                "rssi": None,
+            }
+            self._checked.add(identity)
+
+    def _start_scan(self) -> None:
+        token = self._scan_token + 1
+        self._scan_token = token
+        self._scan_btn.configure(state="disabled")
+        self._status.configure(
+            text="正在扫描附近的 BLE 设备…（手机广播约 15 秒一轮）"
+        )
+        self.after(self.SCAN_WAIT_MS, lambda: self._finish_scan(token))
+
+    def _finish_scan(self, token: int) -> None:
+        if token != self._scan_token or not self.winfo_exists():
+            return
+        self._merge_discovered()
+        self._scan_btn.configure(state="normal")
+        if self._rows:
+            self._status.configure(
+                text=f"已列出 {len(self._rows)} 台设备，勾选后点击确定。"
+            )
+        else:
+            self._status.configure(
+                text="没有扫描到设备，请确认设备蓝牙已开启且未被手机连接。"
+            )
+        self._render()
+
+    def _merge_discovered(self) -> None:
+        fresh: set[str] = set()
+        for item in self._controller.list_discovered_devices(
+            max_age=self.DISCOVERY_MAX_AGE
+        ):
+            address = str(item.get("address") or "").upper()
+            prefix = item.get("prefix") or ""
+            name = item.get("name") or ""
+            rssi = item.get("rssi")
+            if prefix:
+                identity = "p:" + prefix
+                old_identity = "a:" + address
+                old = self._rows.get(old_identity)
+                if old is not None and not old["prefix"]:
+                    if old_identity in self._checked:
+                        self._checked.discard(old_identity)
+                        self._checked.add(identity)
+                    self._rows.pop(old_identity, None)
+                row = self._rows.get(identity)
+                if row is None:
+                    row = {
+                        "identity": identity,
+                        "name": name or "未命名手机",
+                        "address": address,
+                        "prefix": prefix,
+                        "kind": "phone",
+                        "rssi": None,
+                    }
+                    self._rows[identity] = row
+                if address:
+                    row["address"] = address
+                if name:
+                    row["name"] = name
+                row["rssi"] = rssi
+                fresh.add(identity)
+            elif address:
+                if any(
+                    other["prefix"] and other["address"] == address
+                    for other in self._rows.values()
+                ):
+                    continue
+                identity = "a:" + address
+                row = self._rows.get(identity)
+                if row is None:
+                    row = {
+                        "identity": identity,
+                        "name": name or "未命名设备",
+                        "address": address,
+                        "prefix": "",
+                        "kind": "ble",
+                        "rssi": None,
+                    }
+                    self._rows[identity] = row
+                if name and row["name"] == "未命名设备":
+                    row["name"] = name
+                row["rssi"] = rssi
+                fresh.add(identity)
+        for identity, row in self._rows.items():
+            if identity not in fresh:
+                row["rssi"] = None
+
+    def _render(self) -> None:
+        for child in self._list.winfo_children():
+            child.destroy()
+        self._row_vars.clear()
+        if not self._rows:
+            ctk.CTkLabel(
+                self._list,
+                text="正在等待设备广播…",
+                font=("Microsoft YaHei UI", 12),
+                text_color=MUTED,
+                anchor="w",
+            ).pack(fill="x", padx=10, pady=12)
+            return
+
+        def sort_key(row):
+            rssi = row["rssi"]
+            return (
+                0 if row["identity"] in self._checked else 1,
+                -(rssi if rssi is not None else -999),
+                row["name"],
+            )
+
+        for row in sorted(self._rows.values(), key=sort_key):
+            identity = row["identity"]
+            var = tk.BooleanVar(value=identity in self._checked)
+            self._row_vars[identity] = var
+            ctk.CTkCheckBox(
+                self._list,
+                text=row["name"],
+                variable=var,
+                font=("Microsoft YaHei UI", 12, "bold"),
+                text_color=TEXT,
+                command=lambda i=identity: self._toggle(i),
+            ).pack(anchor="w", padx=10, pady=(5, 0))
+            rssi = row["rssi"]
+            detail = (
+                f"{row['address'] or '无地址'} · "
+                f"{'手机广播' if row['prefix'] else 'BLE 设备'} · "
+                f"{f'{rssi} dBm' if rssi is not None else '未扫描到'}"
+            )
+            ctk.CTkLabel(
+                self._list,
+                text=detail,
+                font=("Microsoft YaHei UI", 11),
+                text_color=MUTED,
+                anchor="w",
+                justify="left",
+                wraplength=510,
+            ).pack(anchor="w", padx=(32, 10), pady=(0, 3))
+
+    def _toggle(self, identity: str) -> None:
+        var = self._row_vars.get(identity)
+        if var is None:
+            return
+        if var.get():
+            if len(self._checked) >= MAX_DEVICES:
+                var.set(False)
+                self._status.configure(text=f"最多选择 {MAX_DEVICES} 台设备。")
+                return
+            self._checked.add(identity)
+        else:
+            self._checked.discard(identity)
+
+    def _add_manual(self) -> None:
+        binding = DeviceBinding(name="手动设备", address=self._manual.get())
+        binding.normalize()
+        if not binding.address:
+            self._manual_note.configure(
+                text="MAC 格式无效，示例 AA:BB:CC:DD:EE:FF"
+            )
+            return
+        identity = binding.key()
+        for row in self._rows.values():
+            if row["address"] and row["address"] == binding.address:
+                identity = row["identity"]
+                break
+        if identity not in self._checked and len(self._checked) >= MAX_DEVICES:
+            self._manual_note.configure(text=f"最多选择 {MAX_DEVICES} 台设备。")
+            return
+        if identity not in self._rows:
+            self._rows[identity] = {
+                "identity": identity,
+                "name": binding.name,
+                "address": binding.address,
+                "prefix": "",
+                "kind": "ble",
+                "rssi": None,
+            }
+        self._checked.add(identity)
+        self._manual.delete(0, "end")
+        self._manual_note.configure(text="")
+        self._render()
+
+    def _policy_value(self) -> str:
+        return "all" if self._policy.get().startswith("全部") else "any"
+
+    def _confirm(self) -> None:
+        selected = [
+            row
+            for identity, row in self._rows.items()
+            if identity in self._checked
+        ]
+        if not selected and not messagebox.askyesno(
+            APP_TITLE,
+            "没有选择设备，将恢复自动识别手机广播。继续？",
+            parent=self,
+        ):
+            return
+        devices = [
+            {
+                "name": row["name"],
+                "address": row["address"],
+                "prefix": row["prefix"],
+            }
+            for row in selected
+        ]
+        self._controller.apply_device_bindings(devices, self._policy_value())
+        self._on_saved()
+        self.destroy()
+
+    def _auto_detect(self) -> None:
+        if not messagebox.askyesno(
+            APP_TITLE,
+            "清除所有设备绑定，改为自动识别手机广播？",
+            parent=self,
+        ):
+            return
+        self._controller.rebind_phone()
+        self._on_saved()
+        self.destroy()
+
+
+class AdvancedDialog(ctk.CTkToplevel):
+    def __init__(self, master: MainWindow, controller, on_saved):
+        super().__init__(master)
+        self._controller = controller
+        self._settings = controller.settings
+        self._on_saved = on_saved
         self._labels: dict[str, ctk.CTkLabel] = {}
         self._vars: dict[str, tk.DoubleVar] = {}
 
@@ -1063,18 +1494,14 @@ class AdvancedDialog(ctk.CTkToplevel):
         ctk.CTkFrame(parent, height=1, fg_color=LINE).pack(fill="x", pady=(8, 14))
         ctk.CTkLabel(
             parent,
-            text="手机",
+            text="解锁设备",
             font=("Microsoft YaHei UI", 14, "bold"),
             text_color=TEXT,
             anchor="w",
         ).pack(fill="x")
-        if self._settings.phone_adv_prefix or self._settings.phone_adv_address:
-            detail = f"已绑定「{self._settings.phone_adv_name or '未命名手机'}」"
-        else:
-            detail = "尚未绑定，应用会自动识别手机广播。"
         self._phone_status = ctk.CTkLabel(
             parent,
-            text=detail,
+            text="",
             font=("Microsoft YaHei UI", 12),
             text_color=MUTED,
             anchor="w",
@@ -1082,9 +1509,10 @@ class AdvancedDialog(ctk.CTkToplevel):
             wraplength=480,
         )
         self._phone_status.pack(fill="x", pady=(4, 0))
+        self._update_phone_status()
         ctk.CTkLabel(
             parent,
-            text="保持手机蓝牙开启即可。识别不到或更换手机时，可重新绑定。",
+            text="支持多台会广播的 BLE 设备；被手机连接的手环/耳机通常不会广播。",
             font=("Microsoft YaHei UI", 11),
             text_color=MUTED,
             anchor="w",
@@ -1093,7 +1521,7 @@ class AdvancedDialog(ctk.CTkToplevel):
         ).pack(fill="x", pady=(4, 0))
         self._rebind_btn = ctk.CTkButton(
             parent,
-            text="重新绑定手机",
+            text="选择设备…",
             width=130,
             height=32,
             corner_radius=8,
@@ -1103,17 +1531,34 @@ class AdvancedDialog(ctk.CTkToplevel):
             hover_color=("gray90", "gray22"),
             text_color=TEXT,
             font=("Microsoft YaHei UI", 12),
-            command=self._rebind,
+            command=self._choose_devices,
         )
         self._rebind_btn.pack(anchor="w", pady=(8, 4))
 
-    def _rebind(self) -> None:
-        self._on_rebind()
-        self._rebind_btn.configure(state="disabled", text="正在重新识别…")
-        self._phone_status.configure(
-            text="已清除绑定，正在识别手机广播；请保持手机蓝牙开启。",
-            text_color=GREEN,
-        )
+    def _update_phone_status(self) -> None:
+        bindings = self._settings.bound_devices
+        if not bindings:
+            text = "尚未绑定，应用会自动识别手机广播；也可以手动选择设备。"
+        else:
+            names = "、".join(
+                binding.name or "未命名设备" for binding in bindings[:3]
+            )
+            if len(bindings) > 3:
+                names += f" 等 {len(bindings)} 台"
+            condition = (
+                "全部设备都在附近"
+                if self._settings.device_policy == "all"
+                else "任一设备在附近"
+            )
+            text = f"已绑定 {len(bindings)} 台设备（{condition}）：{names}"
+        self._phone_status.configure(text=text)
+
+    def _choose_devices(self) -> None:
+        DevicePickerDialog(self, self._controller, self._after_devices_changed)
+
+    def _after_devices_changed(self) -> None:
+        self._update_phone_status()
+        self._on_saved()
 
     def _reset(self) -> None:
         for key in self._vars:

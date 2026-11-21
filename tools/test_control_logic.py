@@ -1,14 +1,21 @@
 """Offline checks for the presence and click-to-unlock state machines."""
+import json
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 
+from presence_key import config as config_module  # noqa: E402
 from presence_key import controller as controller_module  # noqa: E402
 from presence_key import presence as presence_module  # noqa: E402
-from presence_key.config import DEFAULT_SETTINGS, Settings  # noqa: E402
+from presence_key.config import (  # noqa: E402
+    DEFAULT_SETTINGS,
+    DeviceBinding,
+    Settings,
+)
 from presence_key.controller import Controller  # noqa: E402
 
 assert DEFAULT_SETTINGS.near_rssi == -72
@@ -85,9 +92,18 @@ class FakePhoneDevice:
     address = "AA:BB:CC:DD:EE:BC"
 
 
+class FakePhoneDeviceB:
+    address = "AA:BB:CC:DD:EE:BD"
+
+
 bound_phone = Settings(
-    phone_adv_prefix="030101aabbccddee",
-    phone_adv_address=FakePhoneDevice.address,
+    bound_devices=[
+        DeviceBinding(
+            name="测试手机",
+            address=FakePhoneDevice.address,
+            prefix="030101aabbccddee",
+        )
+    ]
 )
 phone_monitor = presence_module.PresenceMonitor(lambda: bound_phone, lambda old, new: None)
 assert phone_monitor._classify(
@@ -98,10 +114,20 @@ assert phone_monitor._classify(
     FakePhoneDevice(), FakePhoneAdvert("0341012660a79392c906")
 ) is None
 
-bound_phone.phone_adv_prefix = ""
-assert phone_monitor._classify(
+address_phone = Settings(
+    bound_devices=[
+        DeviceBinding(name="按地址绑定", address=FakePhoneDevice.address)
+    ]
+)
+address_monitor = presence_module.PresenceMonitor(
+    lambda: address_phone, lambda old, new: None
+)
+assert address_monitor._classify(
+    FakePhoneDevice(), FakePhoneAdvert("030101aabbccddeec906")
+)[0] == "ble"
+assert address_monitor._classify(
     FakePhoneDevice(), FakePhoneAdvert("0341012660a79392c906")
-)[0] == "phone"
+) is None
 
 
 def phone_state_after(auto_lock, seconds):
@@ -111,8 +137,13 @@ def phone_state_after(auto_lock, seconds):
         near_confirm=2.0,
         away_timeout=12.0,
         auto_lock=auto_lock,
-        phone_adv_prefix="030101aabbccddee",
-        phone_adv_address=FakePhoneDevice.address,
+        bound_devices=[
+            DeviceBinding(
+                name="测试手机",
+                address=FakePhoneDevice.address,
+                prefix="030101aabbccddee",
+            )
+        ],
     )
     monitor = presence_module.PresenceMonitor(
         lambda: phone_settings, lambda old, new: None
@@ -142,8 +173,13 @@ refresh_settings = Settings(
     far_rssi=-80,
     near_confirm=2.0,
     away_timeout=12.0,
-    phone_adv_prefix="030101aabbccddee",
-    phone_adv_address=FakePhoneDevice.address,
+    bound_devices=[
+        DeviceBinding(
+            name="测试手机",
+            address=FakePhoneDevice.address,
+            prefix="030101aabbccddee",
+        )
+    ],
 )
 refresh_monitor = presence_module.PresenceMonitor(
     lambda: refresh_settings, lambda old, new: None
@@ -191,7 +227,13 @@ phone_check_settings = Settings(
     near_confirm=2.0,
     away_timeout=12.0,
     phone_adv_enabled=True,
-    phone_adv_prefix="030101aabbccddee",
+    bound_devices=[
+        DeviceBinding(
+            name="测试手机",
+            address=FakePhoneDevice.address,
+            prefix="030101aabbccddee",
+        )
+    ],
 )
 phone_check_monitor = presence_module.PresenceMonitor(
     lambda: phone_check_settings, lambda old, new: None
@@ -230,6 +272,112 @@ with patch.object(presence_module, "time", clock):
     assert verify_monitor.verify_near(timeout=1.0) is True
 
 
+# Multiple devices: "any" unlocks when one is present, "all" requires both.
+def multi_settings(policy):
+    return Settings(
+        near_rssi=-60,
+        far_rssi=-80,
+        near_confirm=2.0,
+        away_timeout=12.0,
+        auto_lock=False,
+        device_policy=policy,
+        bound_devices=[
+            DeviceBinding(
+                name="手机 A",
+                address=FakePhoneDevice.address,
+                prefix="030101aabbccddee",
+            ),
+            DeviceBinding(
+                name="手环 B",
+                address=FakePhoneDeviceB.address,
+                prefix="030101aabbccddff",
+            ),
+        ],
+    )
+
+
+or_settings = multi_settings("any")
+or_monitor = presence_module.PresenceMonitor(
+    lambda: or_settings, lambda old, new: None
+)
+or_monitor._scanning = True
+clock = FakeTime()
+with patch.object(presence_module, "time", clock):
+    or_monitor._on_advertisement(
+        FakePhoneDevice(), FakePhoneAdvert("030101aabbccddeec906")
+    )
+    or_monitor._tick()
+    tick_at(or_monitor, clock, 2.0)
+    assert or_monitor.snapshot()["state"] == presence_module.STATE_NEAR
+    assert or_monitor.check_near() is True
+    or_monitor._on_advertisement(
+        FakePhoneDeviceB(), FakePhoneAdvert("030101aabbccddffc906")
+    )
+    clock.now = 16.5
+    assert or_monitor.check_near() is True
+    clock.now = 32.0
+    assert or_monitor.check_near() is False
+    tick_at(or_monitor, clock, 32.0)
+    assert or_monitor.snapshot()["state"] == presence_module.STATE_AWAY
+
+and_settings = multi_settings("all")
+and_monitor = presence_module.PresenceMonitor(
+    lambda: and_settings, lambda old, new: None
+)
+and_monitor._scanning = True
+clock = FakeTime()
+with patch.object(presence_module, "time", clock):
+    and_monitor._on_advertisement(
+        FakePhoneDevice(), FakePhoneAdvert("030101aabbccddeec906")
+    )
+    and_monitor._tick()
+    tick_at(and_monitor, clock, 2.0)
+    assert and_monitor.check_near() is False
+    assert and_monitor.snapshot()["state"] == presence_module.STATE_UNKNOWN
+    and_monitor._on_advertisement(
+        FakePhoneDeviceB(), FakePhoneAdvert("030101aabbccddffc906")
+    )
+    tick_at(and_monitor, clock, 4.0)
+    assert and_monitor.snapshot()["state"] == presence_module.STATE_NEAR
+    assert and_monitor.check_near() is True
+    # B is refreshed while A goes stale: "all" must deny even though B is
+    # fresh within the 16 second phone window.
+    and_monitor._on_advertisement(
+        FakePhoneDeviceB(), FakePhoneAdvert("030101aabbccddffc906")
+    )
+    clock.now = 16.1
+    assert and_monitor.check_near() is False
+
+# Old single-device settings migrate into the new device list.
+with tempfile.TemporaryDirectory() as tmp:
+    path = Path(tmp) / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "phone_adv_prefix": "030101aabbccddee",
+                "phone_adv_address": FakePhoneDevice.address,
+                "phone_adv_name": "旧手机",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with patch.object(config_module, "settings_path", return_value=path):
+        migrated = config_module.load_settings()
+    assert len(migrated.bound_devices) == 1
+    assert migrated.bound_devices[0].name == "旧手机"
+    assert migrated.bound_devices[0].prefix == "030101aabbccddee"
+    assert migrated.bound_devices[0].address == FakePhoneDevice.address
+
+raw_settings = Settings(
+    device_policy="ALL",
+    bound_devices=[{"address": "aa-bb-cc-dd-ee-ff"}],
+)
+raw_settings.normalize()
+assert raw_settings.device_policy == "all"
+assert raw_settings.bound_devices[0].address == "AA:BB:CC:DD:EE:FF"
+assert raw_settings.bound_devices[0].kind == "ble"
+
+
 class FakePresence:
     def __init__(self):
         self.state = presence_module.STATE_UNKNOWN
@@ -264,6 +412,9 @@ class FakePresence:
 
     def reset(self):
         self.state = presence_module.STATE_UNKNOWN
+
+    def rebind(self):
+        self.reset()
 
     def refresh(self):
         self.refresh_calls += 1
@@ -492,5 +643,32 @@ with patch.object(controller_module.lockstate, "is_locked", return_value=False),
     assert controller7.snapshot()["unlock_offered"] is True
     assert len(calls["offer"]) == offers_before + 1
     assert calls["clear"] == clears_before
+
+    # Device selections are normalized, deduplicated, and saved as bindings.
+    fake8 = FakePresence()
+    controller8 = make_controller(fake8)
+    controller8.apply_device_bindings(
+        [
+            {
+                "name": "手机 A",
+                "address": FakePhoneDevice.address.lower(),
+                "prefix": "030101AABBCCDDEE",
+            },
+            {"name": "手环 B", "address": FakePhoneDeviceB.address},
+            {"name": "手机 A 重复", "prefix": "030101aabbccddee"},
+        ],
+        "ALL",
+    )
+    assert controller8.settings.device_policy == "all"
+    assert len(controller8.settings.bound_devices) == 2
+    assert controller8.settings.bound_devices[0].kind == "phone"
+    assert controller8.settings.bound_devices[1].kind == "ble"
+    assert controller8.settings.bound_devices[0].address == FakePhoneDevice.address
+    assert fake8.state == presence_module.STATE_UNKNOWN
+
+    # Restoring auto-detection clears the explicit device list.
+    controller8.rebind_phone()
+    assert controller8.settings.bound_devices == []
+    assert controller8.settings.phone_adv_enabled is True
 
 print("state machine checks passed")

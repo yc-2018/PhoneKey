@@ -6,7 +6,7 @@ import threading
 import time
 
 from . import credential, lockstate, secret, unlock
-from .config import Settings, save_settings
+from .config import DeviceBinding, Settings, save_settings
 from .power import ResumeWatcher
 from .presence import STATE_AWAY, STATE_NEAR, STATE_UNKNOWN, PresenceMonitor
 from .verify_pipe import PresenceVerifyServer
@@ -109,14 +109,42 @@ class Controller:
 
     def rebind_phone(self) -> None:
         self.settings.phone_adv_enabled = True
-        self.settings.phone_adv_prefix = ""
-        self.settings.phone_adv_address = ""
-        self.settings.phone_adv_name = ""
+        self.settings.bound_devices = []
         save_settings(self.settings)
         self._presence.rebind()
         with self._lock:
-            self._last_action = "正在重新识别手机广播…"
-        log.info("已清除手机广播绑定，开始重新识别")
+            self._lock_check = None
+            self._last_action = "正在自动识别手机广播…"
+            self._last_error = ""
+        log.info("已清除设备绑定，开始自动识别")
+
+    def apply_device_bindings(self, devices, policy: str) -> None:
+        bindings = [
+            DeviceBinding(
+                name=item.get("name", ""),
+                address=item.get("address", ""),
+                prefix=item.get("prefix", ""),
+            )
+            for item in devices
+            if isinstance(item, dict)
+        ]
+        with self._lock:
+            self.settings.device_policy = policy
+            self.settings.bound_devices = bindings
+            self.settings.normalize()
+            self._lock_check = None
+        save_settings(self.settings)
+        self._withdraw_offer("解锁设备已更新")
+        self._presence.rebind()
+        count = len(self.settings.bound_devices)
+        condition = "全部在附近" if self.settings.device_policy == "all" else "任一在附近"
+        with self._lock:
+            self._last_action = f"已更新解锁设备：{count} 台，{condition}"
+            self._last_error = ""
+        log.info("已更新解锁设备：%d 台，策略 %s", count, condition)
+
+    def list_discovered_devices(self, max_age: float = 10.0) -> list[dict]:
+        return self._presence.list_discovered(max_age)
 
     def refresh_presence(self) -> None:
         self._withdraw_offer("手动刷新")
