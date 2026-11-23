@@ -1,0 +1,49 @@
+[package]
+name = "phonekey"
+version = "1.0.0"
+description = "PhoneKey 手机感应解锁"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "phonekey_lib"
+
+[[bin]]
+name = "phonekey"
+path = "src/main.rs"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+btleplug = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
+futures-util = "0.3"
+uuid = "1"
+winreg = "0.55"
+log = "0.4"
+simplelog = "0.12"
+anyhow = "1"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Power",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Shutdown",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_SystemInformation",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_WindowsAndMessaging",
+] }

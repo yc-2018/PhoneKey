@@ -4,6 +4,17 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# Rust
+target/
+*.rs.bk
+
+# Node / Vite
+node_modules/
+*.tsbuildinfo
+
+# Tauri generated schemas
+src-tauri/gen/
+
 # PyInstaller
 build/
 dist/
@@ -16,6 +27,13 @@ installer/UnlockProvider.dll
 # Runtime logs and local screenshots
 *.log
 tools/*.png
+/ui-*.png
+/ui-*.jpg
+/screen.png
+
+# Release artifacts
+PhoneKey-*-portable.zip
+PhoneKey-*-setup.exe
 
 # Local references, obsolete experiments, toolchains
 refs/
