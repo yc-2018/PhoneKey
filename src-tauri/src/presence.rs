@@ -8,7 +8,7 @@ use log::info;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::config::{save_settings, DeviceBinding, Settings};
+use crate::config::{save_settings, strip_name_noise, DeviceBinding, Settings};
 
 pub const BEACON_UUID: Uuid = Uuid::from_u128(0x6d696261_6e64_4b65_7900_000000000001);
 const MANUFACTURER_TAG: &[u8] = b"MIBK";
@@ -105,6 +105,7 @@ pub struct PresenceMonitor {
 #[derive(Serialize, Clone, Debug)]
 pub struct DeviceView {
     pub name: String,
+    pub original_name: String,
     pub address: String,
     pub prefix: String,
     pub kind: String,
@@ -641,11 +642,15 @@ impl PresenceMonitor {
         now: Instant,
         settings: &Settings,
     ) -> DeviceView {
-        let name = entry
+        let reported = entry
             .map(|state| state.name.clone())
             .filter(|value| !value.is_empty())
             .or_else(|| binding.map(|value| value.name.clone()))
             .unwrap_or_default();
+        let name = binding
+            .and_then(|value| value.custom_name.clone())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| reported.clone());
         let address = entry
             .map(|state| state.address.clone())
             .filter(|value| !value.is_empty())
@@ -678,6 +683,7 @@ impl PresenceMonitor {
             } else {
                 name.chars().take(40).collect()
             },
+            original_name: reported.chars().take(40).collect(),
             address,
             prefix: binding.map(|value| value.prefix.clone()).unwrap_or_default(),
             kind,
@@ -728,10 +734,15 @@ impl PresenceMonitor {
         let names: Vec<String> = bindings
             .iter()
             .map(|binding| {
-                if binding.name.is_empty() {
+                let name = binding
+                    .custom_name
+                    .clone()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| binding.name.clone());
+                if name.is_empty() {
                     "未命名设备".to_string()
                 } else {
-                    binding.name.clone()
+                    name
                 }
             })
             .collect();
@@ -873,6 +884,7 @@ impl PresenceMonitor {
                 inner.bind_ready_at = None;
                 Some(DeviceBinding {
                     name: candidate.name,
+                    custom_name: None,
                     address: candidate.address,
                     prefix: candidate.prefix,
                     kind: "phone".to_string(),
@@ -987,8 +999,9 @@ fn extract_name(payload: &[u8]) -> String {
     }
     let text = String::from_utf8_lossy(&best).trim().to_string();
     let trimmed = text.trim_matches(|ch: char| !ch.is_alphanumeric());
-    if trimmed.len() >= 4 {
-        trimmed.chars().take(40).collect()
+    let cleaned = strip_name_noise(trimmed);
+    if cleaned.len() >= 4 {
+        cleaned.chars().take(40).collect()
     } else {
         String::new()
     }

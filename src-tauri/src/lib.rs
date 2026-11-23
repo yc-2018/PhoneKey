@@ -18,14 +18,49 @@ use std::sync::{Arc, RwLock};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
+use windows::core::PCWSTR;
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::{
+    MessageBoxW, IDYES, MB_ICONWARNING, MB_YESNO, SW_SHOWNORMAL,
+};
 
 use config::{DeviceBinding, Settings};
 use controller::{Controller, Snapshot};
 use presence::{DiscoveredDevice, PresenceMonitor};
 
+const TRAY_ID: &str = "phonekey";
+
 struct ManagedState {
     controller: Arc<Controller>,
     resource_dir: Option<PathBuf>,
+}
+
+fn apply_tray_visibility(app: &tauri::AppHandle, hide_mode: &str) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let visible = hide_mode != "hidden";
+        if let Err(error) = tray.set_visible(visible) {
+            log::warn!("设置托盘图标可见性失败: {error}");
+        }
+    }
+}
+
+fn confirm_quit() -> bool {
+    let message = "退出 PhoneKey？\n\n\
+        退出后将停止蓝牙检测，锁屏界面不能再使用手机感应解锁。\n\
+        重新启动 PhoneKey 后可恢复；PIN 或密码仍可正常登录。";
+    let message: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
+    let caption: Vec<u16> = "PhoneKey"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        MessageBoxW(
+            None,
+            PCWSTR(message.as_ptr()),
+            PCWSTR(caption.as_ptr()),
+            MB_YESNO | MB_ICONWARNING,
+        ) == IDYES
+    }
 }
 
 fn init_logging() {
@@ -96,6 +131,43 @@ fn apply_devices(
 }
 
 #[tauri::command]
+fn rename_device(
+    state: tauri::State<'_, ManagedState>,
+    prefix: String,
+    address: String,
+    custom_name: Option<String>,
+) -> Result<Snapshot, String> {
+    state
+        .controller
+        .rename_device(&prefix, &address, custom_name)?;
+    Ok(state.controller.snapshot())
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    const ALLOWED_PREFIX: &str = "https://github.com/yc-2018/PhoneKey";
+    if !url.starts_with(ALLOWED_PREFIX) {
+        return Err("不支持的链接".to_string());
+    }
+    let target: Vec<u16> = url.encode_utf16().chain(Some(0)).collect();
+    let verb: Vec<u16> = "open".encode_utf16().chain(Some(0)).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(target.as_ptr()),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    if result.0 as isize <= 32 {
+        return Err("无法打开浏览器".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn set_policy(
     state: tauri::State<'_, ManagedState>,
     policy: String,
@@ -127,11 +199,14 @@ fn clear_password(state: tauri::State<'_, ManagedState>) -> Result<Snapshot, Str
 
 #[tauri::command]
 fn update_settings(
+    app: tauri::AppHandle,
     state: tauri::State<'_, ManagedState>,
     settings: Settings,
 ) -> Result<Snapshot, String> {
     state.controller.update_settings(settings)?;
-    Ok(state.controller.snapshot())
+    let snapshot = state.controller.snapshot();
+    apply_tray_visibility(&app, &snapshot.settings.hide_mode);
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -224,7 +299,7 @@ pub fn run() {
             let menu_controller = controller.clone();
             let menu_toggle = toggle_item.clone();
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id(TRAY_ID)
                 .icon(icon)
                 .tooltip(format!("{} 手机感应解锁", paths::APP_TITLE))
                 .menu(&menu)
@@ -245,8 +320,10 @@ pub fn run() {
                         let _ = menu_controller.lock_now();
                     }
                     "quit" => {
-                        menu_controller.stop();
-                        app.exit(0);
+                        if confirm_quit() {
+                            menu_controller.stop();
+                            app.exit(0);
+                        }
                     }
                     _ => {}
                 })
@@ -261,6 +338,13 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            let hide_mode = controller
+                .settings_handle()
+                .read()
+                .map(|value| value.hide_mode.clone())
+                .unwrap_or_else(|_| "hidden".to_string());
+            apply_tray_visibility(app.handle(), &hide_mode);
 
             if let Some(window) = app.get_webview_window("main") {
                 let window_for_close = window.clone();
@@ -286,8 +370,10 @@ pub fn run() {
             refresh_presence,
             list_discovered,
             apply_devices,
+            rename_device,
             set_policy,
             clear_devices,
+            open_url,
             save_password,
             clear_password,
             update_settings,

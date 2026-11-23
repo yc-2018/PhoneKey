@@ -13,6 +13,8 @@ pub const MAX_DEVICES: usize = 8;
 #[serde(default)]
 pub struct DeviceBinding {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_name: Option<String>,
     pub address: String,
     pub prefix: String,
     pub kind: String,
@@ -20,7 +22,13 @@ pub struct DeviceBinding {
 
 impl DeviceBinding {
     pub fn normalize(&mut self) {
-        self.name = self.name.trim().chars().take(40).collect();
+        let name = self.name.trim();
+        self.name = strip_name_noise(name).chars().take(40).collect();
+        self.custom_name = self
+            .custom_name
+            .take()
+            .map(|value| value.trim().chars().take(40).collect::<String>())
+            .filter(|value| !value.is_empty());
         self.address = normalize_address(&self.address);
         self.prefix = normalize_hex(&self.prefix);
         self.kind = if !self.prefix.is_empty() {
@@ -55,6 +63,8 @@ pub struct Settings {
     pub lock_grace: f64,
     pub unlock_delay: f64,
     pub autostart: bool,
+    pub hide_mode: String,
+    pub theme: String,
     pub paused: bool,
     pub phone_adv_enabled: bool,
     pub device_policy: String,
@@ -73,6 +83,8 @@ impl Default for Settings {
             lock_grace: 3.0,
             unlock_delay: 1.5,
             autostart: false,
+            hide_mode: "hidden".to_string(),
+            theme: "system".to_string(),
             paused: false,
             phone_adv_enabled: true,
             device_policy: "any".to_string(),
@@ -87,6 +99,18 @@ impl Settings {
             "all".to_string()
         } else {
             "any".to_string()
+        };
+        self.hide_mode = if self.hide_mode.eq_ignore_ascii_case("tray") {
+            "tray".to_string()
+        } else {
+            "hidden".to_string()
+        };
+        self.theme = if self.theme.eq_ignore_ascii_case("light") {
+            "light".to_string()
+        } else if self.theme.eq_ignore_ascii_case("dark") {
+            "dark".to_string()
+        } else {
+            "system".to_string()
         };
         let mut devices = Vec::new();
         let mut seen = HashSet::new();
@@ -112,6 +136,22 @@ impl Settings {
         self.lock_grace = clamp_f64(self.lock_grace, 0.0, 60.0, 3.0);
         self.unlock_delay = clamp_f64(self.unlock_delay, 0.0, 15.0, 1.5);
     }
+}
+
+// 广播在名称前带 3 个随机字节，偶尔恰好可打印（如 "r])"），会被当作名称前缀。
+pub fn strip_name_noise(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    if bytes.len() >= 7
+        && bytes[3].is_ascii_alphanumeric()
+        && bytes[..3]
+            .iter()
+            .filter(|byte| !byte.is_ascii_alphanumeric() && **byte != b' ')
+            .count()
+            >= 2
+    {
+        return &text[3..];
+    }
+    text
 }
 
 fn clamp_i32(value: i32, low: i32, high: i32, _default: i32) -> i32 {
@@ -208,6 +248,7 @@ pub fn load_settings() -> Settings {
             if !prefix.is_empty() || !address.is_empty() {
                 settings.bound_devices = vec![DeviceBinding {
                     name,
+                    custom_name: None,
                     address,
                     prefix,
                     kind: String::new(),

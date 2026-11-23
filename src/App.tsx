@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   Bluetooth,
   ChevronRight,
@@ -11,8 +11,10 @@ import {
   Lock,
   Minus,
   Pause,
+  Pencil,
   Play,
   Plus,
+  Power,
   RefreshCw,
   Radio,
   Save,
@@ -28,17 +30,33 @@ import { api } from "./api";
 import type {
   DeviceBinding,
   DevicePolicy,
+  DeviceView,
   PresenceState,
   Settings,
   Snapshot,
   TabKey,
 } from "./types";
 import { DevicePicker } from "./components/DevicePicker";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { PasswordDialog } from "./components/PasswordDialog";
+import { RenameDialog } from "./components/RenameDialog";
 import { formatRssi, RssiBars } from "./components/RssiBars";
 import { Toggle } from "./components/Toggle";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
+const RELEASES_URL = "https://github.com/yc-2018/PhoneKey/releases/latest";
+const FEEDBACK_URL = "https://github.com/yc-2018/PhoneKey/issues/new";
+
+type ConfirmRequest = {
+  title: string;
+  message: ReactNode;
+  note?: ReactNode;
+  noteTone?: "info" | "warning";
+  confirmLabel: string;
+  tone?: "accent" | "warning" | "danger";
+  icon: ReactNode;
+  onConfirm: () => void;
+};
 
 function bindingKey(prefix: string, address: string): string {
   if (prefix) return `p:${prefix}`;
@@ -156,7 +174,9 @@ function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [tab, setTab] = useState<TabKey>("devices");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<DeviceView | null>(null);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [connectionError, setConnectionError] = useState("");
@@ -199,10 +219,26 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const apply = () => {
+      const mode = settingsRef.current?.theme ?? "system";
+      const light = mode === "light" || (mode === "system" && media.matches);
+      document.documentElement.dataset.theme = light ? "light" : "dark";
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [settings?.theme]);
+
   const flash = (message: string) => {
     setNotice(message);
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setNotice(""), 3600);
+  };
+
+  const openLink = (url: string) => {
+    void api.openUrl(url).catch((err) => setError(String(err)));
   };
 
   const applyServerSnapshot = (next: Snapshot, force = true) => {
@@ -317,11 +353,16 @@ function App() {
   };
 
   const lockNow = () => {
-    const confirmed = window.confirm(
-      "立即锁定此电脑？\n\n请先保存未完成的工作。锁屏后需要点击「手机感应解锁」并检测手机。",
-    );
-    if (!confirmed) return;
-    perform("锁定电脑", () => api.lockNow(), "已发送锁屏请求");
+    setConfirmRequest({
+      title: "立即锁定此电脑？",
+      message: "锁屏后需要点击「手机感应解锁」并检测手机。",
+      note: "请先保存未完成的工作。",
+      noteTone: "warning",
+      confirmLabel: "立即锁定",
+      tone: "warning",
+      icon: <Lock size={19} />,
+      onConfirm: () => perform("锁定电脑", () => api.lockNow(), "已发送锁屏请求"),
+    });
   };
 
   const applyDevices = async (devices: DeviceBinding[], policy: DevicePolicy) => {
@@ -362,11 +403,15 @@ function App() {
   };
 
   const clearDevices = () => {
-    const confirmed = window.confirm(
-      "清除所有设备绑定？\n\n程序会重新扫描并自动识别手机系统广播。",
-    );
-    if (!confirmed) return;
-    perform("重新识别手机", () => api.clearDevices(), "已清除绑定，正在重新识别手机");
+    setConfirmRequest({
+      title: "清除所有设备绑定？",
+      message: "程序会重新扫描并自动识别手机系统广播。",
+      confirmLabel: "重新识别手机",
+      tone: "danger",
+      icon: <RefreshCw size={19} />,
+      onConfirm: () =>
+        perform("重新识别手机", () => api.clearDevices(), "已清除绑定，正在重新识别手机"),
+    });
   };
 
   const refreshPresence = () => {
@@ -374,30 +419,64 @@ function App() {
   };
 
   const installCp = () => {
-    const confirmed = window.confirm(
-      "安装或更新 Windows 解锁组件？\n\n" +
-        "这会请求管理员权限，将 UnlockProvider.dll 写入 System32，并在注册表中注册锁屏凭证提供程序。\n" +
-        "请确认当前没有正在进行的重要工作。",
-    );
-    if (!confirmed) return;
-    perform("安装解锁组件", () => api.installCp(), "解锁组件已安装");
+    setConfirmRequest({
+      title: "安装或更新 Windows 解锁组件？",
+      message:
+        "这会请求管理员权限，将 UnlockProvider.dll 写入 System32，并在注册表中注册锁屏凭证提供程序。",
+      note: "请确认当前没有正在进行的重要工作。",
+      noteTone: "warning",
+      confirmLabel: "安装组件",
+      tone: "danger",
+      icon: <ShieldAlert size={19} />,
+      onConfirm: () =>
+        perform("安装解锁组件", () => api.installCp(), "解锁组件已安装"),
+    });
   };
 
   const uninstallCp = () => {
-    const confirmed = window.confirm(
-      "卸载 Windows 解锁组件？\n\n手机感应解锁选项将从锁屏界面移除，PIN 和密码登录不受影响。",
-    );
-    if (!confirmed) return;
-    perform("卸载解锁组件", () => api.uninstallCp(), "解锁组件已卸载");
+    setConfirmRequest({
+      title: "卸载 Windows 解锁组件？",
+      message: "手机感应解锁选项将从锁屏界面移除，PIN 和密码登录不受影响。",
+      confirmLabel: "卸载组件",
+      tone: "danger",
+      icon: <Trash2 size={19} />,
+      onConfirm: () =>
+        perform("卸载解锁组件", () => api.uninstallCp(), "解锁组件已卸载"),
+    });
   };
 
   const clearPassword = () => {
-    const confirmed = window.confirm(
-      "清除已保存的 Windows 密码？\n\n手机解锁选项将不可用，直到重新保存密码。",
-    );
-    if (!confirmed) return;
-    perform("清除密码", () => api.clearPassword(), "已清除保存的密码");
+    setConfirmRequest({
+      title: "清除已保存的 Windows 密码？",
+      message: "手机解锁选项将不可用，直到重新保存密码。",
+      confirmLabel: "清除密码",
+      tone: "danger",
+      icon: <KeyRound size={19} />,
+      onConfirm: () =>
+        perform("清除密码", () => api.clearPassword(), "已清除保存的密码"),
+    });
   };
+
+  const quitApp = () => {
+    setConfirmRequest({
+      title: "退出 PhoneKey？",
+      message: "退出后将停止蓝牙检测，锁屏界面不能再使用手机感应解锁。",
+      note: "重新启动 PhoneKey 后可恢复；PIN 或密码仍可正常登录。",
+      confirmLabel: "退出软件",
+      tone: "danger",
+      icon: <Power size={19} />,
+      onConfirm: () => perform("退出软件", () => api.quit()),
+    });
+  };
+
+  const renameBinding =
+    renameTarget && settings
+      ? settings.bound_devices.find(
+          (device) =>
+            bindingKey(device.prefix, device.address) ===
+            bindingKey(renameTarget.prefix, renameTarget.address),
+        )
+      : undefined;
 
   return (
     <div className="app-shell">
@@ -422,14 +501,14 @@ function App() {
           </div>
           <button
             className="window-button"
-            aria-label="最小化"
+            aria-label={settings.hide_mode === "hidden" ? "完全隐藏窗口" : "最小化到托盘"}
             onClick={() => api.hideWindow()}
           >
             <Minus size={16} />
           </button>
           <button
             className="window-button close"
-            aria-label="关闭到托盘"
+            aria-label={settings.hide_mode === "hidden" ? "完全隐藏窗口" : "关闭到托盘"}
             onClick={() => api.hideWindow()}
           >
             <X size={16} />
@@ -650,6 +729,15 @@ function App() {
                     </div>
                     <div className="device-card-actions">
                       <button
+                        className="icon-button"
+                        aria-label="重命名设备"
+                        title="重命名设备"
+                        onClick={() => setRenameTarget(device)}
+                        disabled={!!busy}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
                         className="icon-button danger"
                         aria-label="移除设备"
                         onClick={() => removeDevice(device.prefix, device.address)}
@@ -795,6 +883,38 @@ function App() {
 
           {tab === "rules" && (
             <section className="tab-section">
+              <div className="settings-card">
+                <div className="card-title-row">
+                  <div>
+                    <h4>外观主题</h4>
+                    <p>默认跟随 Windows 系统主题，也可固定深色或浅色</p>
+                  </div>
+                </div>
+                <div className="segmented window-mode">
+                  <button
+                    className={settings.theme === "system" ? "active" : ""}
+                    onClick={() => updateSetting("theme", "system", 0)}
+                    disabled={!!busy}
+                  >
+                    跟随系统
+                  </button>
+                  <button
+                    className={settings.theme === "dark" ? "active" : ""}
+                    onClick={() => updateSetting("theme", "dark", 0)}
+                    disabled={!!busy}
+                  >
+                    深色
+                  </button>
+                  <button
+                    className={settings.theme === "light" ? "active" : ""}
+                    onClick={() => updateSetting("theme", "light", 0)}
+                    disabled={!!busy}
+                  >
+                    浅色
+                  </button>
+                </div>
+              </div>
+
               <div className="section-heading">
                 <div>
                   <h3>自动化规则</h3>
@@ -970,6 +1090,48 @@ function App() {
                   </div>
                 </div>
               </div>
+
+              <div className="settings-card">
+                <div className="card-title-row">
+                  <div>
+                    <h4>窗口隐藏</h4>
+                    <p>关闭或最小化窗口后的隐藏方式，后台解锁仍会继续</p>
+                  </div>
+                </div>
+                <div className="segmented window-mode">
+                  <button
+                    className={settings.hide_mode === "hidden" ? "active" : ""}
+                    onClick={() => updateSetting("hide_mode", "hidden", 0)}
+                    disabled={!!busy}
+                  >
+                    完全隐藏
+                  </button>
+                  <button
+                    className={settings.hide_mode === "tray" ? "active" : ""}
+                    onClick={() => updateSetting("hide_mode", "tray", 0)}
+                    disabled={!!busy}
+                  >
+                    隐藏到托盘
+                  </button>
+                </div>
+                <div className="info-note">
+                  <Info size={14} />
+                  <span>
+                    {settings.hide_mode === "hidden"
+                      ? "关闭后完全隐藏，重新点击 PhoneKey 快捷方式可再次打开设置。"
+                      : "关闭后隐藏到托盘，点击托盘图标可再次打开设置。"}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                className="wide-quit-button"
+                onClick={quitApp}
+                disabled={!!busy}
+              >
+                <Power size={15} />
+                退出软件
+              </button>
             </section>
           )}
         </div>
@@ -982,7 +1144,15 @@ function App() {
             {snapshot.last_error || snapshot.last_action || "已就绪"}
           </span>
         </div>
-        <span className="version">v{APP_VERSION}</span>
+        <div className="footer-links">
+          <button className="footer-link" onClick={() => openLink(RELEASES_URL)}>
+            检查更新
+          </button>
+          <button className="footer-link" onClick={() => openLink(FEEDBACK_URL)}>
+            意见反馈
+          </button>
+          <span className="version">v{APP_VERSION}</span>
+        </div>
       </footer>
 
       {busy && (
@@ -1001,6 +1171,19 @@ function App() {
         />
       )}
 
+      {renameTarget && (
+        <RenameDialog
+          device={renameTarget}
+          currentName={renameBinding?.custom_name ?? ""}
+          onClose={() => setRenameTarget(null)}
+          onSaved={(next, message) => {
+            applyServerSnapshot(next, true);
+            setRenameTarget(null);
+            flash(message);
+          }}
+        />
+      )}
+
       {passwordOpen && (
         <PasswordDialog
           hasPassword={snapshot.has_password}
@@ -1009,6 +1192,24 @@ function App() {
           onSaved={(next) => {
             applyServerSnapshot(next, true);
             flash("Windows 密码已加密保存");
+          }}
+        />
+      )}
+
+      {confirmRequest && (
+        <ConfirmDialog
+          title={confirmRequest.title}
+          message={confirmRequest.message}
+          note={confirmRequest.note}
+          noteTone={confirmRequest.noteTone}
+          confirmLabel={confirmRequest.confirmLabel}
+          tone={confirmRequest.tone}
+          icon={confirmRequest.icon}
+          onCancel={() => setConfirmRequest(null)}
+          onConfirm={() => {
+            const run = confirmRequest.onConfirm;
+            setConfirmRequest(null);
+            run();
           }}
         />
       )}

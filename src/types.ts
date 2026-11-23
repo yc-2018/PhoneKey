@@ -1,9 +1,12 @@
 export type PresenceState = "unknown" | "near" | "away";
 export type DevicePolicy = "any" | "all";
 export type DeviceKind = "phone" | "ble";
+export type HideMode = "hidden" | "tray";
+export type ThemeMode = "system" | "dark" | "light";
 
 export interface DeviceBinding {
   name: string;
+  custom_name?: string | null;
   address: string;
   prefix: string;
   kind: DeviceKind | "";
@@ -11,6 +14,7 @@ export interface DeviceBinding {
 
 export interface DeviceView {
   name: string;
+  original_name: string;
   address: string;
   prefix: string;
   kind: string;
@@ -30,6 +34,8 @@ export interface Settings {
   lock_grace: number;
   unlock_delay: number;
   autostart: boolean;
+  hide_mode: HideMode;
+  theme: ThemeMode;
   paused: boolean;
   phone_adv_enabled: boolean;
   device_policy: DevicePolicy;

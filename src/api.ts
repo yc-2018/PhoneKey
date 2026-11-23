@@ -9,6 +9,8 @@ export const api = {
   listDiscovered: (maxAge = 12) => invoke<DiscoveredDevice[]>("list_discovered", { maxAge }),
   applyDevices: (devices: DeviceBinding[], policy: DevicePolicy) =>
     invoke<Snapshot>("apply_devices", { devices, policy }),
+  renameDevice: (prefix: string, address: string, customName: string | null) =>
+    invoke<Snapshot>("rename_device", { prefix, address, customName }),
   setPolicy: (policy: DevicePolicy) => invoke<Snapshot>("set_policy", { policy }),
   clearDevices: () => invoke<Snapshot>("clear_devices"),
   savePassword: (password: string) => invoke<Snapshot>("save_password", { password }),
@@ -18,5 +20,6 @@ export const api = {
   installCp: () => invoke<Snapshot>("install_cp"),
   uninstallCp: () => invoke<Snapshot>("uninstall_cp"),
   hideWindow: () => invoke<void>("hide_window"),
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
   quit: () => invoke<void>("quit_app"),
 };

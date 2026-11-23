@@ -21,7 +21,7 @@ export function RssiBars({
         <span
           key={index}
           className={`rssi-bar ${index < level ? "active" : ""}`}
-          style={{ height: `${5 + index * 3}px` }}
+          style={{ height: `${large ? 8 + index * 6 : 5 + index * 3}px` }}
         />
       ))}
     </span>

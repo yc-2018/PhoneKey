@@ -279,7 +279,7 @@ input {
 .status-main {
   position: relative;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
@@ -402,7 +402,6 @@ input {
   flex-direction: column;
   align-items: center;
   gap: 7px;
-  padding-top: 2px;
 }
 
 .signal-ring {
@@ -739,6 +738,18 @@ input {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
+.segmented.window-mode {
+  display: flex;
+  width: 100%;
+  margin-top: 11px;
+}
+
+.segmented.window-mode button {
+  flex: 1;
+  height: 30px;
+  font-size: 10.5px;
+}
+
 .device-list {
   display: flex;
   flex-direction: column;
@@ -873,6 +884,9 @@ input {
 
 .device-card-actions {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .icon-button {
@@ -956,6 +970,30 @@ input {
   border-color: rgba(124, 107, 255, 0.35);
   background: rgba(124, 107, 255, 0.06);
   color: #c0b7ff;
+}
+
+.wide-quit-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 36px;
+  border: 1px solid rgba(255, 107, 122, 0.24);
+  border-radius: 10px;
+  background: rgba(255, 107, 122, 0.055);
+  color: #ff9aa5;
+  font-size: 10.5px;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.wide-quit-button:hover:not(:disabled) {
+  border-color: rgba(255, 107, 122, 0.45);
+  background: rgba(255, 107, 122, 0.12);
+  color: #ffb2ba;
 }
 
 .settings-card {
@@ -1425,6 +1463,26 @@ input[type="range"]::-moz-range-thumb {
   font-size: 8.5px;
 }
 
+.footer-links {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+}
+
+.footer-link {
+  padding: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: 9px;
+  line-height: 1;
+  transition: color 0.15s ease;
+}
+
+.footer-link:hover {
+  color: var(--text);
+}
+
 .modal-backdrop {
   position: absolute;
   inset: 0;
@@ -1491,6 +1549,61 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 10px;
   background: var(--accent-soft);
   color: #b3a6ff;
+}
+
+.modal.confirm-dialog {
+  max-width: 340px;
+}
+
+.confirm-dialog.tone-warning .modal-icon {
+  background: rgba(255, 178, 71, 0.13);
+  color: #ffc978;
+}
+
+.confirm-dialog.tone-danger .modal-icon {
+  background: rgba(255, 107, 122, 0.12);
+  color: #ff9aa5;
+}
+
+.confirm-body {
+  margin-top: 13px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.confirm-body p {
+  margin: 0;
+}
+
+.confirm-note {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--faint);
+  font-size: 9.5px;
+  line-height: 1.55;
+}
+
+.confirm-note.warning {
+  border: 1px solid rgba(255, 178, 71, 0.18);
+  background: rgba(255, 178, 71, 0.06);
+  color: #e8c48d;
+}
+
+.confirm-actions {
+  justify-content: flex-end;
+}
+
+.confirm-dialog.tone-danger .primary-button {
+  border-color: rgba(255, 107, 122, 0.42);
+  background: linear-gradient(135deg, #e0505c, #c73542);
+  box-shadow: 0 6px 16px rgba(199, 53, 66, 0.24);
+}
+
+.confirm-dialog.tone-danger .primary-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #ef616d, #d44250);
 }
 
 .search-box {
@@ -1984,4 +2097,441 @@ input[type="range"]::-moz-range-thumb {
   .status-card {
     padding-top: 14px;
   }
+}
+
+:root[data-theme="light"] {
+  --bg: #f2f4fa;
+  --bg-soft: #e9edf5;
+  --panel: #ffffff;
+  --panel-raised: #f7f8fc;
+  --line: rgba(20, 30, 55, 0.09);
+  --line-strong: rgba(20, 30, 55, 0.16);
+  --text: #1b2231;
+  --muted: #5a6377;
+  --faint: #8a92a4;
+  --accent: #6653f0;
+  --accent-soft: rgba(102, 83, 240, 0.12);
+  --accent-glow: rgba(124, 107, 255, 0.16);
+  --green: #10945f;
+  --green-soft: rgba(16, 148, 95, 0.12);
+  --red: #d63949;
+  --red-soft: rgba(214, 57, 73, 0.1);
+  --amber: #a86f14;
+  --amber-soft: rgba(168, 111, 20, 0.13);
+  --blue: #2f7fe0;
+  color-scheme: light;
+}
+
+:root[data-theme="light"] .app-shell {
+  border-color: rgba(20, 30, 55, 0.1);
+  background:
+    radial-gradient(120% 80% at 100% 0%, rgba(124, 107, 255, 0.1), transparent 56%),
+    radial-gradient(90% 70% at 0% 100%, rgba(61, 220, 151, 0.06), transparent 60%),
+    linear-gradient(160deg, #f8f9fd 0%, #eef1f8 48%, #f3f5fa 100%);
+  box-shadow:
+    0 22px 70px rgba(23, 32, 56, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+:root[data-theme="light"] .window-button:hover {
+  background: rgba(20, 30, 55, 0.07);
+}
+
+:root[data-theme="light"] .window-button.close:hover {
+  background: rgba(230, 57, 74, 0.12);
+  color: #c22e3c;
+}
+
+:root[data-theme="light"] .monitor-pill:not(.paused):not(.starting) {
+  border-color: rgba(16, 148, 95, 0.28);
+  background: rgba(16, 148, 95, 0.09);
+  color: #0c7a4e;
+}
+
+:root[data-theme="light"] .monitor-pill.starting {
+  border-color: rgba(20, 30, 55, 0.1);
+  background: rgba(20, 30, 55, 0.04);
+}
+
+:root[data-theme="light"] .content {
+  scrollbar-color: rgba(20, 30, 55, 0.18) transparent;
+}
+
+:root[data-theme="light"] .content::-webkit-scrollbar-thumb,
+:root[data-theme="light"] .picker-list::-webkit-scrollbar-thumb {
+  background: rgba(20, 30, 55, 0.18);
+}
+
+:root[data-theme="light"] .status-glow {
+  display: none;
+}
+
+:root[data-theme="light"] .rssi-bars .rssi-bar.active {
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .device-state.near span {
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .signal-ripple {
+  border-color: rgba(16, 148, 95, 0.25);
+}
+
+:root[data-theme="light"] .status-card {
+  border-color: rgba(102, 83, 240, 0.22);
+  background:
+    linear-gradient(135deg, rgba(124, 107, 255, 0.1), rgba(124, 107, 255, 0.015) 58%),
+    #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 16px 40px rgba(23, 32, 56, 0.08);
+}
+
+:root[data-theme="light"] .status-card.tone-near {
+  border-color: rgba(16, 148, 95, 0.22);
+  background:
+    linear-gradient(135deg, rgba(61, 220, 151, 0.13), rgba(124, 107, 255, 0.05) 58%),
+    #ffffff;
+}
+
+:root[data-theme="light"] .status-card.tone-away {
+  border-color: rgba(214, 57, 73, 0.22);
+  background:
+    linear-gradient(135deg, rgba(255, 107, 122, 0.09), rgba(124, 107, 255, 0.03) 58%),
+    #ffffff;
+}
+
+:root[data-theme="light"] .tone-near .status-glow {
+  background: radial-gradient(circle, rgba(16, 148, 95, 0.16), transparent 68%);
+}
+
+:root[data-theme="light"] .tone-away .status-glow {
+  background: radial-gradient(circle, rgba(214, 57, 73, 0.12), transparent 68%);
+}
+
+:root[data-theme="light"] .tone-near .device-headline h2 {
+  color: #0c7a4e;
+}
+
+:root[data-theme="light"] .tone-away .device-headline h2 {
+  color: #b02a37;
+}
+
+:root[data-theme="light"] .state-pill:not(.tone-near):not(.tone-away) {
+  background: rgba(20, 30, 55, 0.04);
+}
+
+:root[data-theme="light"] .status-details > span {
+  border-color: rgba(20, 30, 55, 0.08);
+  background: rgba(20, 30, 55, 0.04);
+}
+
+:root[data-theme="light"] .signal-ring {
+  border-color: rgba(20, 30, 55, 0.1);
+  background:
+    radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.95), transparent 62%),
+    rgba(20, 30, 55, 0.035);
+}
+
+:root[data-theme="light"] .tone-near .signal-ring {
+  border-color: rgba(16, 148, 95, 0.3);
+}
+
+:root[data-theme="light"] .tone-away .signal-ring {
+  border-color: rgba(214, 57, 73, 0.26);
+}
+
+:root[data-theme="light"] .rssi-bars .rssi-bar:not(.active) {
+  background: rgba(20, 30, 55, 0.16);
+}
+
+:root[data-theme="light"] .action-button:not(.primary) {
+  background: rgba(20, 30, 55, 0.045);
+  color: #333c4e;
+}
+
+:root[data-theme="light"] .action-button:not(.primary):hover:not(:disabled) {
+  border-color: rgba(20, 30, 55, 0.2);
+  background: rgba(20, 30, 55, 0.08);
+}
+
+:root[data-theme="light"] .banner.error,
+:root[data-theme="light"] .inline-error {
+  color: #b02a37;
+}
+
+:root[data-theme="light"] .banner.success {
+  color: #0c7a4e;
+}
+
+:root[data-theme="light"] .banner-close:hover {
+  background: rgba(20, 30, 55, 0.07);
+}
+
+:root[data-theme="light"] .tabs {
+  background: rgba(20, 30, 55, 0.05);
+}
+
+:root[data-theme="light"] .tabs button.active {
+  background: #ffffff;
+  box-shadow:
+    0 1px 3px rgba(23, 32, 56, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+:root[data-theme="light"] .tab-count,
+:root[data-theme="light"] .add-button,
+:root[data-theme="light"] .small-button,
+:root[data-theme="light"] .text-button,
+:root[data-theme="light"] .slider-value {
+  color: #5b48e4;
+}
+
+:root[data-theme="light"] .text-button:hover {
+  color: #4534c4;
+}
+
+:root[data-theme="light"] .policy-card {
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .segmented {
+  border-color: rgba(20, 30, 55, 0.08);
+  background: rgba(20, 30, 55, 0.06);
+}
+
+:root[data-theme="light"] .segmented button.active {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(23, 32, 56, 0.14);
+}
+
+:root[data-theme="light"] .segmented.compact button span {
+  background: rgba(20, 30, 55, 0.07);
+}
+
+:root[data-theme="light"] .segmented.compact button.active span {
+  background: var(--accent-soft);
+}
+
+:root[data-theme="light"] .device-card:not(.present) {
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .device-card.present {
+  border-color: rgba(16, 148, 95, 0.2);
+  background:
+    linear-gradient(180deg, rgba(61, 220, 151, 0.07), rgba(255, 255, 255, 0) 70%),
+    #ffffff;
+}
+
+:root[data-theme="light"] .device-icon.phone {
+  color: #6653f0;
+}
+
+:root[data-theme="light"] .kind-tag {
+  color: #2f7fe0;
+}
+
+:root[data-theme="light"] .kind-tag.phone {
+  color: #5b48e4;
+}
+
+:root[data-theme="light"] .icon-button:hover {
+  background: rgba(20, 30, 55, 0.07);
+}
+
+:root[data-theme="light"] .empty-card {
+  border-color: rgba(20, 30, 55, 0.14);
+  background: rgba(20, 30, 55, 0.02);
+}
+
+:root[data-theme="light"] .empty-icon {
+  color: #6653f0;
+}
+
+:root[data-theme="light"] .wide-ghost-button {
+  border-color: rgba(20, 30, 55, 0.16);
+}
+
+:root[data-theme="light"] .wide-ghost-button:hover {
+  color: #5b48e4;
+}
+
+:root[data-theme="light"] .wide-quit-button {
+  color: #c22e3c;
+}
+
+:root[data-theme="light"] .wide-quit-button:hover:not(:disabled) {
+  color: #a82834;
+}
+
+:root[data-theme="light"] .settings-card {
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(23, 32, 56, 0.04);
+}
+
+:root[data-theme="light"] .toggle:not(.is-on) {
+  border-color: rgba(20, 30, 55, 0.14);
+  background: rgba(20, 30, 55, 0.08);
+}
+
+:root[data-theme="light"] .toggle-thumb {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(23, 32, 56, 0.25);
+}
+
+:root[data-theme="light"] .account-chip {
+  border-color: rgba(20, 30, 55, 0.09);
+  background: rgba(20, 30, 55, 0.04);
+}
+
+:root[data-theme="light"] .secondary-button {
+  border-color: rgba(20, 30, 55, 0.14);
+  background: rgba(20, 30, 55, 0.045);
+  color: #333c4e;
+}
+
+:root[data-theme="light"] .secondary-button:hover:not(:disabled) {
+  border-color: rgba(20, 30, 55, 0.22);
+  background: rgba(20, 30, 55, 0.08);
+}
+
+:root[data-theme="light"] .ghost-button:hover:not(:disabled) {
+  background: rgba(20, 30, 55, 0.055);
+}
+
+:root[data-theme="light"] .danger-text {
+  color: #c22e3c;
+}
+
+:root[data-theme="light"] .danger-text:hover:not(:disabled) {
+  color: #a82834;
+}
+
+:root[data-theme="light"] .info-note {
+  background: rgba(20, 30, 55, 0.035);
+}
+
+:root[data-theme="light"] .tip-card {
+  color: #2b5f9e;
+}
+
+:root[data-theme="light"] .slider-row + .slider-row {
+  border-top-color: rgba(20, 30, 55, 0.07);
+}
+
+:root[data-theme="light"] input[type="range"] {
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--range-progress),
+    rgba(20, 30, 55, 0.12) var(--range-progress) 100%
+  );
+}
+
+:root[data-theme="light"] input[type="range"]::-webkit-slider-thumb {
+  border-color: #6653f0;
+  box-shadow:
+    0 2px 6px rgba(23, 32, 56, 0.25),
+    0 0 0 3px rgba(102, 83, 240, 0.12);
+}
+
+:root[data-theme="light"] input[type="range"]::-moz-range-thumb {
+  border-color: #6653f0;
+}
+
+:root[data-theme="light"] .threshold-zone {
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1px rgba(20, 30, 55, 0.2),
+    0 0 4px rgba(23, 32, 56, 0.2);
+}
+
+:root[data-theme="light"] .stat-grid > div {
+  border-color: rgba(20, 30, 55, 0.08);
+  background: rgba(20, 30, 55, 0.035);
+}
+
+:root[data-theme="light"] .statusbar {
+  border-top-color: rgba(20, 30, 55, 0.07);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+:root[data-theme="light"] .footer-state.error {
+  color: #b02a37;
+}
+
+:root[data-theme="light"] .version {
+  color: rgba(20, 30, 55, 0.38);
+}
+
+:root[data-theme="light"] .modal-backdrop {
+  background: rgba(23, 32, 56, 0.35);
+}
+
+:root[data-theme="light"] .modal {
+  border-color: rgba(20, 30, 55, 0.1);
+  background:
+    radial-gradient(120% 80% at 100% 0%, rgba(124, 107, 255, 0.08), transparent 55%),
+    #ffffff;
+  box-shadow:
+    0 30px 80px rgba(23, 32, 56, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+:root[data-theme="light"] .modal-icon {
+  color: #5b48e4;
+}
+
+:root[data-theme="light"] .confirm-dialog.tone-warning .modal-icon {
+  background: rgba(242, 180, 92, 0.18);
+  color: #a86f14;
+}
+
+:root[data-theme="light"] .confirm-dialog.tone-danger .modal-icon {
+  background: rgba(255, 107, 122, 0.14);
+  color: #c22e3c;
+}
+
+:root[data-theme="light"] .confirm-note {
+  background: rgba(20, 30, 55, 0.035);
+}
+
+:root[data-theme="light"] .confirm-note.warning {
+  border-color: rgba(168, 111, 20, 0.22);
+  background: rgba(242, 180, 92, 0.13);
+  color: #8a5c12;
+}
+
+:root[data-theme="light"] .search-box {
+  border-color: rgba(20, 30, 55, 0.1);
+  background: rgba(20, 30, 55, 0.035);
+}
+
+:root[data-theme="light"] .manual-row input,
+:root[data-theme="light"] .password-field {
+  border-color: rgba(20, 30, 55, 0.1);
+  background: rgba(20, 30, 55, 0.035);
+}
+
+:root[data-theme="light"] .picker-row:hover {
+  background: rgba(20, 30, 55, 0.04);
+}
+
+:root[data-theme="light"] .check:not(.checked) {
+  border-color: rgba(20, 30, 55, 0.2);
+}
+
+:root[data-theme="light"] .picker-device-meta em {
+  color: #5b48e4;
+}
+
+:root[data-theme="light"] .password-note {
+  color: #0c7a4e;
+}
+
+:root[data-theme="light"] .busy-toast {
+  border-color: rgba(20, 30, 55, 0.1);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 30px rgba(23, 32, 56, 0.16);
 }

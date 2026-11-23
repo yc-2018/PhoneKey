@@ -331,6 +331,69 @@ impl Controller {
         Ok(())
     }
 
+    pub fn rename_device(
+        &self,
+        prefix: &str,
+        address: &str,
+        custom_name: Option<String>,
+    ) -> Result<(), String> {
+        let prefix = prefix.trim().to_ascii_lowercase();
+        let address = address.trim().to_ascii_uppercase().replace('-', ":");
+        let key = if !prefix.is_empty() {
+            format!("p:{prefix}")
+        } else if !address.is_empty() {
+            format!("a:{address}")
+        } else {
+            String::new()
+        };
+        if key.is_empty() {
+            return Err("设备不存在".to_string());
+        }
+        let (label, cleared) = {
+            let mut settings = self
+                .settings
+                .write()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let Some(binding) = settings
+                .bound_devices
+                .iter_mut()
+                .find(|binding| binding.key() == key)
+            else {
+                return Err("设备不存在".to_string());
+            };
+            let custom_name = custom_name
+                .map(|value| value.trim().chars().take(40).collect::<String>())
+                .filter(|value| !value.is_empty());
+            let cleared = custom_name.is_none();
+            binding.custom_name = custom_name;
+            settings.normalize();
+            save_settings(&mut settings);
+            let binding = settings
+                .bound_devices
+                .iter()
+                .find(|binding| binding.key() == key)
+                .cloned()
+                .unwrap_or_default();
+            (
+                binding
+                    .custom_name
+                    .clone()
+                    .unwrap_or_else(|| binding.name.clone()),
+                cleared,
+            )
+        };
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.last_action = if cleared {
+                "已恢复设备原名".to_string()
+            } else {
+                format!("已重命名设备：{label}")
+            };
+            inner.last_error.clear();
+        }
+        log::info!("已更新设备名称：{label}");
+        Ok(())
+    }
+
     pub fn set_device_policy(&self, policy: &str) -> Result<(), String> {
         let condition = {
             let mut settings = self

@@ -1,6 +1,6 @@
 [package]
 name = "phonekey"
-version = "1.0.0"
+version = "1.1.0"
 description = "PhoneKey 手机感应解锁"
 edition = "2021"
 rust-version = "1.77"
@@ -45,5 +45,6 @@ windows = { version = "0.62", features = [
     "Win32_System_StationsAndDesktops",
     "Win32_System_SystemInformation",
     "Win32_System_WindowsProgramming",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
