@@ -9,7 +9,6 @@ import {
   KeyRound,
   Loader2,
   Lock,
-  Minus,
   Pause,
   Pencil,
   Play,
@@ -24,6 +23,7 @@ import {
   Smartphone,
   Sparkles,
   Trash2,
+  Wifi,
   X,
 } from "lucide-react";
 import { api } from "./api";
@@ -43,7 +43,7 @@ import { RenameDialog } from "./components/RenameDialog";
 import { formatRssi, RssiBars } from "./components/RssiBars";
 import { Toggle } from "./components/Toggle";
 
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 const RELEASES_URL = "https://github.com/yc-2018/PhoneKey/releases/latest";
 const FEEDBACK_URL = "https://github.com/yc-2018/PhoneKey/issues/new";
 
@@ -75,11 +75,12 @@ function stateText(
   state: PresenceState,
   scanning: boolean,
   paused: boolean,
+  wifiOnly: boolean,
 ): string {
   if (paused) return "已暂停";
   if (!scanning) return "扫描未启动";
-  if (state === "near") return "在附近";
-  if (state === "away") return "已离开";
+  if (state === "near") return wifiOnly ? "在线" : "在附近";
+  if (state === "away") return wifiOnly ? "离线" : "已离开";
   return "等待检测";
 }
 
@@ -268,18 +269,23 @@ function App() {
     }
   };
 
-  const flushSettings = async (sequence: number, next: Settings) => {
+  const flushSettings = async (
+    sequence: number,
+    next: Settings,
+  ): Promise<boolean> => {
     try {
       const result = await api.updateSettings(next);
-      if (sequence !== saveSeq.current) return;
+      if (sequence !== saveSeq.current) return false;
       dirtyRef.current = false;
       applyServerSnapshot(result, true);
+      return true;
     } catch (err) {
-      if (sequence !== saveSeq.current) return;
+      if (sequence !== saveSeq.current) return false;
       dirtyRef.current = false;
       setError(String(err));
       const fresh = await api.snapshot().catch(() => null);
       if (fresh) applyServerSnapshot(fresh, true);
+      return false;
     }
   };
 
@@ -289,10 +295,26 @@ function App() {
     dirtyRef.current = true;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     const sequence = ++saveSeq.current;
-    saveTimer.current = window.setTimeout(
-      () => flushSettings(sequence, next),
-      delay,
-    );
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = null;
+      void flushSettings(sequence, next);
+    }, delay);
+  };
+
+  const hideApp = async () => {
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    if (dirtyRef.current && settingsRef.current) {
+      const saved = await flushSettings(++saveSeq.current, settingsRef.current);
+      if (!saved) return;
+    }
+    try {
+      await api.hideWindow();
+    } catch {
+      // 窗口销毁时 IPC 可能提前断开
+    }
   };
 
   const updateSetting = <K extends keyof Settings>(
@@ -335,13 +357,24 @@ function App() {
   const { presence } = snapshot;
   const paused = settings.paused;
   const scanning = presence.scanning && !presence.error;
-  const statusLabel = stateText(presence.state, scanning, paused);
+  const wifiOnly =
+    presence.devices.length > 0 &&
+    presence.devices.every((device) => device.kind === "wifi");
+  const primaryDevice =
+    presence.devices.find((device) => device.present) ?? presence.devices[0];
+  const statusLabel = stateText(presence.state, scanning, paused, wifiOnly);
   const statusTone = stateClass(presence.state, scanning);
   const primaryName =
     presence.phone_name ||
     presence.devices[0]?.name ||
     (presence.phone_bound ? "已绑定设备" : "等待识别设备");
   const activeDevices = presence.devices.filter((device) => device.present);
+  const sourceNote =
+    presence.source === "wifi"
+      ? "Wi-Fi 辅助"
+      : presence.source === "mixed"
+        ? "含 Wi-Fi 辅助"
+        : "";
   const visibleError = error || connectionError;
 
   const togglePause = () => {
@@ -460,7 +493,7 @@ function App() {
   const quitApp = () => {
     setConfirmRequest({
       title: "退出 PhoneKey？",
-      message: "退出后将停止蓝牙检测，锁屏界面不能再使用手机感应解锁。",
+      message: "退出后将停止手机检测，锁屏界面不能再使用手机感应解锁。",
       note: "重新启动 PhoneKey 后可恢复；PIN 或密码仍可正常登录。",
       confirmLabel: "退出软件",
       tone: "danger",
@@ -500,16 +533,9 @@ function App() {
             {paused ? "已暂停" : scanning ? "监控中" : "准备中"}
           </div>
           <button
-            className="window-button"
-            aria-label={settings.hide_mode === "hidden" ? "完全隐藏窗口" : "最小化到托盘"}
-            onClick={() => api.hideWindow()}
-          >
-            <Minus size={16} />
-          </button>
-          <button
             className="window-button close"
             aria-label={settings.hide_mode === "hidden" ? "完全隐藏窗口" : "关闭到托盘"}
-            onClick={() => api.hideWindow()}
+            onClick={() => void hideApp()}
           >
             <X size={16} />
           </button>
@@ -534,15 +560,24 @@ function App() {
               <p className="status-meta">
                 {presence.phone_bound
                   ? `${presence.device_count} 台设备 · ${
-                      settings.device_policy === "all" ? "全部在附近" : "任一在附近"
-                    }`
+                      settings.device_policy === "all" ? "全部可用" : "任一可用"
+                    }${sourceNote ? ` · ${sourceNote}` : ""}`
                   : "等待绑定解锁设备"}
                 {presence.error ? ` · ${presence.error}` : ""}
               </p>
               <div className="status-details">
                 <span>
-                  <Radio size={13} />
-                  {formatRssi(presence.smoothed ?? presence.rssi)}
+                  {primaryDevice?.kind === "wifi" ? (
+                    <>
+                      <Wifi size={13} />
+                      {primaryDevice.present ? "Wi-Fi 在线" : "Wi-Fi 未响应"}
+                    </>
+                  ) : (
+                    <>
+                      <Radio size={13} />
+                      {formatRssi(presence.smoothed ?? presence.rssi)}
+                    </>
+                  )}
                 </span>
                 <span>
                   <RefreshCw size={12} />
@@ -551,7 +586,7 @@ function App() {
                 {snapshot.locked && snapshot.lock_check && (
                   <span className={`lock-check ${snapshot.lock_check}`}>
                     <Lock size={11} />
-                    锁屏校验：{snapshot.lock_check === "near" ? "在附近" : "不在附近"}
+                    锁屏校验：{snapshot.lock_check === "near" ? "通过" : "未通过"}
                   </span>
                 )}
                 {snapshot.remote && (
@@ -567,11 +602,15 @@ function App() {
                 {presence.state === "near" && !paused && (
                   <span className="signal-ripple" />
                 )}
-                <RssiBars rssi={presence.smoothed ?? presence.rssi} large />
+                {wifiOnly ? (
+                  <Wifi size={30} strokeWidth={1.6} />
+                ) : (
+                  <RssiBars rssi={presence.smoothed ?? presence.rssi} large />
+                )}
               </div>
               <span className="signal-caption">
                 {activeDevices.length > 0
-                  ? `${activeDevices.length} 台在附近`
+                  ? `${activeDevices.length} 台${wifiOnly ? "在线" : "在附近"}`
                   : "等待信号"}
               </span>
             </div>
@@ -638,7 +677,7 @@ function App() {
               <div className="section-heading">
                 <div>
                   <h3>解锁设备</h3>
-                  <p>设备靠近后，锁屏界面的手机解锁才会通过点击校验</p>
+                  <p>小米手机广播或 Wi-Fi 辅助设备在线时，锁屏界面才允许点击解锁</p>
                 </div>
                 <button className="add-button" onClick={() => setPickerOpen(true)}>
                   <Plus size={15} />
@@ -651,8 +690,8 @@ function App() {
                   <span className="policy-title">解锁条件</span>
                   <span className="policy-description">
                     {settings.device_policy === "all"
-                      ? "所有绑定设备都在附近时，才允许点击解锁"
-                      : "任意一台绑定设备在附近，即可点击解锁"}
+                      ? "所有绑定设备都可用时，才允许点击解锁"
+                      : "任意一台绑定设备可用时，即可点击解锁"}
                   </span>
                 </div>
                 <div className="segmented">
@@ -681,8 +720,8 @@ function App() {
                     </div>
                     <h4>尚未绑定设备</h4>
                     <p>
-                      点击「添加设备」选择手机广播或 BLE 设备。
-                      未绑定时，程序只在后台扫描，不会把陌生广播当作钥匙。
+                      点击「添加设备」选择小米手机广播或 BLE 设备。
+                      其他品牌手机只能添加 Wi-Fi 辅助，且只能判断同一局域网。
                     </p>
                     <button className="text-button" onClick={() => setPickerOpen(true)}>
                       搜索附近设备 <ChevronRight size={14} />
@@ -695,9 +734,15 @@ function App() {
                     className={`device-card ${device.present ? "present" : ""}`}
                     key={bindingKey(device.prefix, device.address) || device.address}
                   >
-                    <div className={`device-icon ${device.kind === "phone" ? "phone" : ""}`}>
+                    <div
+                      className={`device-icon ${
+                        device.kind === "wifi" ? "wifi" : device.kind === "phone" ? "phone" : ""
+                      }`}
+                    >
                       {device.kind === "phone" ? (
                         <Smartphone size={18} />
+                      ) : device.kind === "wifi" ? (
+                        <Wifi size={18} />
                       ) : (
                         <Bluetooth size={18} />
                       )}
@@ -706,7 +751,11 @@ function App() {
                       <div className="device-card-title">
                         <strong>{device.name || "未命名设备"}</strong>
                         <span className={`kind-tag ${device.kind}`}>
-                          {device.kind === "phone" ? "手机广播" : "BLE"}
+                          {device.kind === "phone"
+                            ? "手机广播"
+                            : device.kind === "wifi"
+                              ? "Wi-Fi 辅助"
+                              : "BLE"}
                         </span>
                       </div>
                       <span className="device-address">
@@ -719,11 +768,26 @@ function App() {
                           }`}
                         >
                           <span />
-                          {device.present ? "在附近" : formatAge(device.last_seen_age)}
+                          {device.kind === "wifi"
+                            ? device.present
+                              ? "局域网在线"
+                              : "未响应"
+                            : device.present
+                              ? "在附近"
+                              : formatAge(device.last_seen_age)}
                         </span>
-                        <span className="device-signal">
-                          <RssiBars rssi={device.smoothed ?? device.rssi} />
-                          {formatRssi(device.smoothed ?? device.rssi)}
+                        <span className={`device-signal ${device.kind === "wifi" ? "wifi" : ""}`}>
+                          {device.kind === "wifi" ? (
+                            <>
+                              <Wifi size={11} />
+                              同一局域网
+                            </>
+                          ) : (
+                            <>
+                              <RssiBars rssi={device.smoothed ?? device.rssi} />
+                              {formatRssi(device.smoothed ?? device.rssi)}
+                            </>
+                          )}
                         </span>
                       </div>
                     </div>
@@ -749,6 +813,16 @@ function App() {
                   </article>
                 ))}
               </div>
+
+              {presence.devices.some((device) => device.kind === "wifi") && (
+                <div className="wifi-hint">
+                  <CircleAlert size={14} />
+                  <span>
+                    Wi-Fi 辅助只判断是否在同一局域网，不判断距离；手机休眠、路由器隔离或
+                    IP 变化都可能误判，仍必须点击锁屏磁贴才会解锁。
+                  </span>
+                </div>
+              )}
 
               <button
                 className="wide-ghost-button"

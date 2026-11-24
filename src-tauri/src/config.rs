@@ -29,6 +29,19 @@ impl DeviceBinding {
             .take()
             .map(|value| value.trim().chars().take(40).collect::<String>())
             .filter(|value| !value.is_empty());
+        if self.kind.eq_ignore_ascii_case("wifi") {
+            self.prefix.clear();
+            self.address = normalize_wifi_target(&self.address);
+            self.kind = if self.address.is_empty() {
+                String::new()
+            } else {
+                "wifi".to_string()
+            };
+            if self.kind == "wifi" && self.name.is_empty() {
+                self.name = "Wi-Fi 设备".to_string();
+            }
+            return;
+        }
         self.address = normalize_address(&self.address);
         self.prefix = normalize_hex(&self.prefix);
         self.kind = if !self.prefix.is_empty() {
@@ -166,6 +179,33 @@ fn clamp_f64(value: f64, low: f64, high: f64, default: f64) -> f64 {
     }
 }
 
+pub fn normalize_wifi_target(value: &str) -> String {
+    let text = value.trim().to_ascii_lowercase();
+    if text.is_empty()
+        || text.len() > 253
+        || text.starts_with('-')
+        || text.ends_with('-')
+        || !text
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-')
+    {
+        return String::new();
+    }
+    if text.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
+        return if text.parse::<std::net::Ipv4Addr>().is_ok() {
+            text
+        } else {
+            String::new()
+        };
+    }
+    if text.split('.').any(|label| {
+        label.is_empty() || label.len() > 63 || label.starts_with('-') || label.ends_with('-')
+    }) {
+        return String::new();
+    }
+    text
+}
+
 pub fn normalize_hex(value: &str) -> String {
     let mut text: String = value
         .trim()
@@ -277,5 +317,49 @@ pub fn save_settings(settings: &mut Settings) {
     }
     if let Err(error) = fs::rename(&temporary, &path) {
         error!("替换配置文件失败: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_wifi_target() {
+        let mut binding = DeviceBinding {
+            name: String::new(),
+            custom_name: None,
+            address: " 192.168.1.23 ".to_string(),
+            prefix: String::new(),
+            kind: "wifi".to_string(),
+        };
+        binding.normalize();
+        assert_eq!(binding.kind, "wifi");
+        assert_eq!(binding.address, "192.168.1.23");
+        assert_eq!(binding.key(), "a:192.168.1.23");
+        assert_eq!(binding.name, "Wi-Fi 设备");
+    }
+
+    #[test]
+    fn keeps_wifi_hostname() {
+        assert_eq!(
+            normalize_wifi_target(" My-Phone.Local "),
+            "my-phone.local"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_wifi_target() {
+        for value in [
+            "",
+            "192.168.1",
+            "999.1.1.1",
+            "bad host",
+            "-phone",
+            "phone-",
+            "192.168.01.1",
+        ] {
+            assert!(normalize_wifi_target(value).is_empty(), "{value}");
+        }
     }
 }

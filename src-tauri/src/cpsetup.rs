@@ -35,6 +35,26 @@ fn find_script(name: &str, resource_dir: Option<&Path>) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+fn system32(name: &str) -> PathBuf {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    PathBuf::from(root).join("System32").join(name)
+}
+
+fn vcruntime_ready() -> bool {
+    system32("vcruntime140.dll").is_file()
+}
+
+fn ensure_vcruntime() -> Result<(), String> {
+    if vcruntime_ready() {
+        return Ok(());
+    }
+    error!("缺少 VCRUNTIME140.dll，拒绝安装解锁组件");
+    Err("缺少 Microsoft Visual C++ 运行库（VCRUNTIME140.dll）。\
+锁屏组件由 Windows 登录界面加载，没有该运行库将无法显示手机解锁选项。\
+请先安装 Microsoft Visual C++ 2015–2022 x64 运行库，再重新安装组件。"
+        .to_string())
+}
+
 // PowerShell 5.1 的 -File 不接受 \\?\ 长路径前缀。
 fn plain_path(path: &Path) -> PathBuf {
     let text = path.as_os_str().to_string_lossy();
@@ -93,6 +113,7 @@ fn run_script(script: &Path) -> Result<String, String> {
 }
 
 pub fn install_cp(resource_dir: Option<&Path>) -> Result<(), String> {
+    ensure_vcruntime()?;
     let script = find_script("install_cp.ps1", resource_dir)
         .ok_or_else(|| "找不到安装脚本 install_cp.ps1".to_string())?;
     run_script(&script).map(|_| ())

@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::config::{save_settings, DeviceBinding, Settings};
+use crate::config::{
+    normalize_address, normalize_wifi_target, save_settings, DeviceBinding, Settings,
+};
 use crate::power::ResumeWatcher;
 use crate::presence::{
     DiscoveredDevice, PresenceMonitor, PresenceSnapshot, STATE_AWAY, STATE_NEAR, STATE_UNKNOWN,
@@ -285,7 +287,9 @@ impl Controller {
                 .write()
                 .unwrap_or_else(|poison| poison.into_inner());
             settings.phone_adv_enabled = true;
-            settings.bound_devices.clear();
+            settings
+                .bound_devices
+                .retain(|binding| binding.kind == "wifi");
             save_settings(&mut settings);
         }
         self.presence.rebind();
@@ -294,7 +298,7 @@ impl Controller {
             inner.last_action = "正在自动识别手机广播…".to_string();
             inner.last_error.clear();
         }
-        log::info!("已清除设备绑定，开始自动识别");
+        log::info!("已清除蓝牙设备绑定，开始自动识别（保留 Wi-Fi 辅助）");
     }
 
     pub fn apply_device_bindings(
@@ -338,13 +342,18 @@ impl Controller {
         custom_name: Option<String>,
     ) -> Result<(), String> {
         let prefix = prefix.trim().to_ascii_lowercase();
-        let address = address.trim().to_ascii_uppercase().replace('-', ":");
+        let mac = normalize_address(address);
         let key = if !prefix.is_empty() {
             format!("p:{prefix}")
-        } else if !address.is_empty() {
-            format!("a:{address}")
+        } else if !mac.is_empty() {
+            format!("a:{mac}")
         } else {
-            String::new()
+            let wifi = normalize_wifi_target(address);
+            if wifi.is_empty() {
+                String::new()
+            } else {
+                format!("a:{wifi}")
+            }
         };
         if key.is_empty() {
             return Err("设备不存在".to_string());

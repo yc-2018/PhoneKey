@@ -1,6 +1,6 @@
 [package]
 name = "phonekey"
-version = "1.1.0"
+version = "1.2.0"
 description = "PhoneKey 手机感应解锁"
 edition = "2021"
 rust-version = "1.77"

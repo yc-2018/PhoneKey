@@ -10,6 +10,7 @@ mod secret;
 mod sys;
 mod unlock;
 mod verify_pipe;
+mod wifi;
 
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -46,7 +47,7 @@ fn apply_tray_visibility(app: &tauri::AppHandle, hide_mode: &str) {
 
 fn confirm_quit() -> bool {
     let message = "退出 PhoneKey？\n\n\
-        退出后将停止蓝牙检测，锁屏界面不能再使用手机感应解锁。\n\
+        退出后将停止手机检测，锁屏界面不能再使用手机感应解锁。\n\
         重新启动 PhoneKey 后可恢复；PIN 或密码仍可正常登录。";
     let message: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
     let caption: Vec<u16> = "PhoneKey"
@@ -79,9 +80,24 @@ fn init_logging() {
 
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
         let _ = window.unminimize();
+        let _ = window.show();
         let _ = window.set_focus();
+        return;
+    }
+    let Some(config) = app.config().app.windows.first().cloned() else {
+        log::warn!("缺少主窗口配置，无法显示窗口");
+        return;
+    };
+    match tauri::WebviewWindowBuilder::from_config(app, &config) {
+        Ok(builder) => match builder.build() {
+            Ok(window) => {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            Err(error) => log::warn!("创建主窗口失败: {error}"),
+        },
+        Err(error) => log::warn!("读取主窗口配置失败: {error}"),
     }
 }
 
@@ -239,7 +255,7 @@ fn uninstall_cp(
 #[tauri::command]
 fn hide_window(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+        let _ = window.destroy();
     }
 }
 
@@ -272,6 +288,7 @@ pub fn run() {
 
             let presence = PresenceMonitor::new(settings.clone());
             tauri::async_runtime::spawn(ble::scan_loop(presence.clone()));
+            tauri::async_runtime::spawn(wifi::scan_loop(presence.clone()));
 
             let controller = Controller::new(settings.clone(), presence);
             controller.start();
@@ -346,16 +363,6 @@ pub fn run() {
                 .unwrap_or_else(|_| "hidden".to_string());
             apply_tray_visibility(app.handle(), &hide_mode);
 
-            if let Some(window) = app.get_webview_window("main") {
-                let window_for_close = window.clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = window_for_close.hide();
-                    }
-                });
-            }
-
             let start_hidden = std::env::args().any(|arg| arg == "--autostart");
             if !start_hidden {
                 show_main(app.handle());
@@ -385,11 +392,15 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("启动 PhoneKey 失败")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { code, api, .. } if code.is_none() => {
+                api.prevent_exit();
+            }
+            tauri::RunEvent::Exit => {
                 if let Some(state) = app.try_state::<ManagedState>() {
                     state.controller.stop();
                 }
             }
+            _ => {}
         });
 }

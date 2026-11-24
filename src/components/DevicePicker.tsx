@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Bluetooth,
   Check,
+  CircleAlert,
   Loader2,
   Plus,
   Radio,
   Search,
   Smartphone,
+  Wifi,
   X,
 } from "lucide-react";
 import { api } from "../api";
@@ -23,6 +25,47 @@ function bindingKey(device: Pick<DeviceBinding, "prefix" | "address">): string {
   if (device.prefix) return `p:${device.prefix}`;
   if (device.address) return `a:${device.address}`;
   return "";
+}
+
+function normalizeWifiHost(value: string): string {
+  const host = value.trim().toLowerCase();
+  if (
+    !host ||
+    host.length > 253 ||
+    host.startsWith("-") ||
+    host.endsWith("-") ||
+    !/^[a-z0-9.-]+$/.test(host)
+  ) {
+    return "";
+  }
+  if (/^[0-9.]+$/.test(host)) {
+    const parts = host.split(".");
+    if (parts.length !== 4) return "";
+    for (const part of parts) {
+      if (
+        !/^\d{1,3}$/.test(part) ||
+        (part.length > 1 && part.startsWith("0")) ||
+        Number(part) > 255
+      ) {
+        return "";
+      }
+    }
+    return host;
+  }
+  if (
+    host
+      .split(".")
+      .some(
+        (label) =>
+          !label ||
+          label.length > 63 ||
+          label.startsWith("-") ||
+          label.endsWith("-"),
+      )
+  ) {
+    return "";
+  }
+  return host;
 }
 
 export function DevicePicker({
@@ -53,6 +96,9 @@ export function DevicePicker({
   const [showManual, setShowManual] = useState(false);
   const [manualAddress, setManualAddress] = useState("");
   const [manualName, setManualName] = useState("");
+  const [showWifi, setShowWifi] = useState(false);
+  const [wifiHost, setWifiHost] = useState("");
+  const [wifiName, setWifiName] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -89,6 +135,12 @@ export function DevicePicker({
     const phone = devices.filter((device) => device.kind === "phone").length;
     return { all: devices.length, phone, ble: devices.length - phone };
   }, [devices]);
+
+  const wifiBindings = useMemo(
+    () =>
+      Array.from(selected.values()).filter((device) => device.kind === "wifi"),
+    [selected],
+  );
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -155,6 +207,47 @@ export function DevicePicker({
     setError("");
   };
 
+  const addWifi = () => {
+    const host = normalizeWifiHost(wifiHost);
+    if (!host) {
+      setError("请输入正确的手机 IP 或主机名，例如 192.168.1.23");
+      return;
+    }
+    const binding: DeviceBinding = {
+      name: wifiName.trim().slice(0, 40) || "Wi-Fi 设备",
+      address: host,
+      prefix: "",
+      kind: "wifi",
+    };
+    const key = bindingKey(binding);
+    if (selected.has(key)) {
+      setError("该 Wi-Fi 设备已添加");
+      return;
+    }
+    if (selected.size >= 8) {
+      setError("最多绑定 8 台设备");
+      return;
+    }
+    setSelected((previous) => {
+      const next = new Map(previous);
+      next.set(key, binding);
+      return next;
+    });
+    setWifiHost("");
+    setWifiName("");
+    setShowWifi(false);
+    setError("");
+  };
+
+  const removeSelected = (key: string) => {
+    setSelected((previous) => {
+      const next = new Map(previous);
+      next.delete(key);
+      return next;
+    });
+    setError("");
+  };
+
   const apply = async () => {
     setSaving(true);
     setError("");
@@ -177,12 +270,23 @@ export function DevicePicker({
         <header className="modal-head">
           <div>
             <h2>添加解锁设备</h2>
-            <p>选择手机广播，或按 MAC 地址绑定普通 BLE 设备</p>
+            <p>选择小米手机广播、BLE 设备，或添加 Wi-Fi 辅助设备</p>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="关闭">
             <X size={18} />
           </button>
         </header>
+
+        <div className="picker-notice">
+          <CircleAlert size={16} />
+          <div>
+            <strong>手机广播目前仅支持小米</strong>
+            <span>
+              其他品牌手机不会出现在“小米手机”列表；普通 BLE 设备仍可按固定 MAC
+              绑定。没有蓝牙广播时，可添加 Wi-Fi 辅助，但它只能判断同一局域网，不能判断距离。
+            </span>
+          </div>
+        </div>
 
         <div className="search-box">
           <Search size={16} />
@@ -200,7 +304,7 @@ export function DevicePicker({
             {(
               [
                 ["all", "全部", counts.all],
-                ["phone", "手机", counts.phone],
+                ["phone", "小米手机", counts.phone],
                 ["ble", "BLE", counts.ble],
               ] as const
             ).map(([key, label, count]) => (
@@ -214,13 +318,57 @@ export function DevicePicker({
               </button>
             ))}
           </div>
-          <button
-            className="text-button"
-            onClick={() => setShowManual((value) => !value)}
-          >
-            <Plus size={14} /> 手动绑定
-          </button>
+          <div className="picker-tools">
+            <button
+              className={`text-button ${showWifi ? "active" : ""}`}
+              onClick={() => {
+                setShowWifi((value) => !value);
+                setShowManual(false);
+              }}
+            >
+              <Wifi size={14} /> Wi-Fi 辅助
+            </button>
+            <button
+              className={`text-button ${showManual ? "active" : ""}`}
+              onClick={() => {
+                setShowManual((value) => !value);
+                setShowWifi(false);
+              }}
+            >
+              <Plus size={14} /> 手动绑定
+            </button>
+          </div>
         </div>
+
+        {showWifi && (
+          <div className="wifi-box">
+            <div className="wifi-warning">
+              <CircleAlert size={15} />
+              <span>
+                Wi-Fi 只能判断手机和电脑是否在同一局域网，不能判断距离。手机休眠或禁止
+                ping、路由器 AP 隔离、IP 变化、访客设备都可能误判，同一网络中的设备也可能冒充。
+                它只作辅助，仍必须点击锁屏磁贴才会解锁。
+              </span>
+            </div>
+            <div className="wifi-fields">
+              <input
+                value={wifiName}
+                onChange={(event) => setWifiName(event.target.value)}
+                placeholder="设备名称（可选）"
+                maxLength={40}
+              />
+              <input
+                value={wifiHost}
+                onChange={(event) => setWifiHost(event.target.value)}
+                placeholder="手机 IP 或主机名，如 192.168.1.23"
+                spellCheck={false}
+              />
+              <button className="small-button" onClick={addWifi}>
+                添加
+              </button>
+            </div>
+          </div>
+        )}
 
         {showManual && (
           <div className="manual-row">
@@ -243,13 +391,43 @@ export function DevicePicker({
         )}
 
         <div className="picker-list">
-          {visible.length === 0 && !loading && (
+          {visible.length === 0 && wifiBindings.length === 0 && !loading && (
             <div className="picker-empty">
               <Radio size={22} />
               <p>{query ? "没有匹配的设备" : "附近暂未扫描到设备"}</p>
-              <span>请确认蓝牙已开启，手机广播处于可发现状态</span>
+              <span>
+                请确认蓝牙已开启，手机广播处于可发现状态；其他品牌手机可改用 Wi-Fi 辅助。
+              </span>
             </div>
           )}
+          {wifiBindings.length > 0 && (
+            <div className="picker-section-label">已添加的 Wi-Fi 辅助</div>
+          )}
+          {wifiBindings.map((binding) => (
+            <button
+              key={bindingKey(binding)}
+              className="picker-row selected"
+              title="点击移除"
+              onClick={() => removeSelected(bindingKey(binding))}
+            >
+              <span className="check checked">
+                <Check size={12} strokeWidth={3} />
+              </span>
+              <span className="device-icon wifi">
+                <Wifi size={17} />
+              </span>
+              <span className="picker-device-info">
+                <span className="picker-device-name">
+                  {binding.name || "Wi-Fi 设备"}
+                </span>
+                <span className="picker-device-meta">
+                  {binding.address}
+                  <em>Wi-Fi 辅助</em>
+                </span>
+              </span>
+              <span className="picker-wifi-hint">同一局域网</span>
+            </button>
+          ))}
           {visible.map((device) => {
             const key =
               device.kind === "phone" && device.prefix

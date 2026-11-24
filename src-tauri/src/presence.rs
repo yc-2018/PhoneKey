@@ -29,6 +29,8 @@ const PHONE_BIND_WINDOW: f64 = 10.0;
 const PHONE_MIN_AWAY_TIMEOUT: f64 = 30.0;
 const VERIFY_FRESH_WINDOW: f64 = 6.0;
 const VERIFY_PHONE_FRESH_WINDOW: f64 = 16.0;
+const WIFI_NEAR_SEEN_WINDOW: f64 = 8.0;
+const WIFI_VERIFY_FRESH_WINDOW: f64 = 6.0;
 pub const VERIFY_TIMEOUT: f64 = 2.5;
 
 #[derive(Clone, Debug)]
@@ -82,8 +84,24 @@ struct PresenceInner {
     first_seen_at: Option<Instant>,
     bind_ready_at: Option<Instant>,
     bind_candidates: HashMap<(String, String), Candidate>,
-    scanning: bool,
-    error: Option<String>,
+    ble_scanning: bool,
+    ble_error: Option<String>,
+    wifi_scanning: bool,
+    wifi_error: Option<String>,
+}
+
+impl PresenceInner {
+    fn scanning(&self) -> bool {
+        self.ble_scanning || self.wifi_scanning
+    }
+
+    fn error(&self) -> Option<String> {
+        if self.scanning() {
+            None
+        } else {
+            self.ble_error.clone().or_else(|| self.wifi_error.clone())
+        }
+    }
 }
 
 impl PresenceInner {
@@ -192,8 +210,14 @@ impl PresenceMonitor {
 
     pub fn set_scanning(&self, scanning: bool, error: Option<String>) {
         let mut inner = self.inner.lock().unwrap();
-        inner.scanning = scanning;
-        inner.error = error;
+        inner.ble_scanning = scanning;
+        inner.ble_error = error;
+    }
+
+    pub fn set_wifi_scanning(&self, scanning: bool, error: Option<String>) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.wifi_scanning = scanning;
+        inner.wifi_error = error;
     }
 
     pub fn reset(&self) {
@@ -352,7 +376,11 @@ impl PresenceMonitor {
                     return None;
                 }
             }
-            if settings.bound_devices.is_empty() {
+            if settings
+                .bound_devices
+                .iter()
+                .all(|binding| binding.kind == "wifi")
+            {
                 return Some(Classified::Candidate {
                     address,
                     payload_hex,
@@ -519,10 +547,25 @@ impl PresenceMonitor {
         }
         {
             let mut settings = self.settings.write().unwrap();
-            if !settings.bound_devices.is_empty() {
+            if settings
+                .bound_devices
+                .iter()
+                .any(|item| item.kind != "wifi")
+            {
                 return false;
             }
-            settings.bound_devices = vec![binding.clone()];
+            if settings.bound_devices.len() >= crate::config::MAX_DEVICES {
+                return false;
+            }
+            settings.bound_devices.push(binding.clone());
+            settings.normalize();
+            if !settings
+                .bound_devices
+                .iter()
+                .any(|item| item.key() == binding.key())
+            {
+                return false;
+            }
             save_settings(&mut settings);
         }
         let mut inner = self.inner.lock().unwrap();
@@ -540,6 +583,61 @@ impl PresenceMonitor {
         true
     }
 
+    pub fn wifi_targets(&self) -> Vec<DeviceBinding> {
+        let settings = self.settings_snapshot();
+        if !settings.phone_adv_enabled {
+            return Vec::new();
+        }
+        settings
+            .bound_devices
+            .into_iter()
+            .filter(|binding| binding.kind == "wifi")
+            .collect()
+    }
+
+    pub fn update_wifi(&self, binding: &DeviceBinding, present: bool) {
+        if binding.kind != "wifi" || binding.key().is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut inner = self.inner.lock().unwrap();
+        let entry = inner
+            .device_states
+            .entry(binding.key())
+            .or_insert_with(|| DeviceState {
+                name: String::new(),
+                address: String::new(),
+                kind: "wifi".to_string(),
+                rssi: None,
+                ema: None,
+                last_sample: None,
+                last_seen: None,
+                near_since: None,
+                weak_since: None,
+            });
+        if !binding.name.is_empty() {
+            entry.name = binding.name.clone();
+        }
+        entry.address = binding.address.clone();
+        entry.kind = "wifi".to_string();
+        if present {
+            let was_stale = entry
+                .last_seen
+                .map(|last_seen| {
+                    now.saturating_duration_since(last_seen).as_secs_f64() > WIFI_NEAR_SEEN_WINDOW
+                })
+                .unwrap_or(true);
+            if was_stale || entry.near_since.is_none() {
+                entry.near_since = Some(now);
+            }
+            entry.last_seen = Some(now);
+            inner.seen_since_start = true;
+            if inner.first_seen_at.is_none() {
+                inner.first_seen_at = Some(now);
+            }
+        }
+    }
+
     pub fn check_near(&self, max_age: Option<f64>) -> bool {
         let settings = self.settings_snapshot();
         let phone_mode = settings.phone_adv_enabled;
@@ -551,29 +649,41 @@ impl PresenceMonitor {
         } else {
             Vec::new()
         };
-        let max_age = max_age.unwrap_or(if phone_mode {
+        let max_age_secs = max_age.unwrap_or(if phone_mode {
             VERIFY_PHONE_FRESH_WINDOW
         } else {
             VERIFY_FRESH_WINDOW
         });
         let inner = self.inner.lock().unwrap();
-        if !inner.scanning {
-            return false;
-        }
         let now = Instant::now();
-        let max_age = Duration::from_secs_f64(max_age);
+        let max_age = Duration::from_secs_f64(max_age_secs);
+        let wifi_max_age = Duration::from_secs_f64(max_age_secs.min(WIFI_VERIFY_FRESH_WINDOW));
         if phone_mode {
             let mut present = Vec::with_capacity(bindings.len());
             for binding in &bindings {
-                let is_present = inner
-                    .device_states
-                    .get(&binding.key())
-                    .and_then(|entry| {
-                        let last_seen = entry.last_seen?;
-                        let ema = entry.ema?;
-                        Some(now.duration_since(last_seen) <= max_age && ema >= settings.near_rssi as f64)
-                    })
-                    .unwrap_or(false);
+                let is_present = if binding.kind == "wifi" {
+                    inner.wifi_scanning
+                        && inner
+                            .device_states
+                            .get(&binding.key())
+                            .and_then(|entry| entry.last_seen)
+                            .map(|last_seen| now.duration_since(last_seen) <= wifi_max_age)
+                            .unwrap_or(false)
+                } else {
+                    inner.ble_scanning
+                        && inner
+                            .device_states
+                            .get(&binding.key())
+                            .and_then(|entry| {
+                                let last_seen = entry.last_seen?;
+                                let ema = entry.ema?;
+                                Some(
+                                    now.duration_since(last_seen) <= max_age
+                                        && ema >= settings.near_rssi as f64,
+                                )
+                            })
+                            .unwrap_or(false)
+                };
                 present.push(is_present);
             }
             if Self::policy(&settings) == "all" {
@@ -582,6 +692,9 @@ impl PresenceMonitor {
             return present.iter().any(|value| *value);
         }
 
+        if !inner.ble_scanning {
+            return false;
+        }
         inner.device_states.iter().any(|(key, entry)| {
             if !key.starts_with("app:") {
                 return false;
@@ -602,7 +715,7 @@ impl PresenceMonitor {
             if self.check_near(None) {
                 return true;
             }
-            if !self.inner.lock().unwrap().scanning || Instant::now() >= deadline {
+            if !self.inner.lock().unwrap().scanning() || Instant::now() >= deadline {
                 return false;
             }
             thread::sleep(Duration::from_millis(50));
@@ -666,17 +779,22 @@ impl PresenceMonitor {
         let age = entry.and_then(|state| state.last_seen).map(|last_seen| {
             now.saturating_duration_since(last_seen).as_secs_f64().max(0.0)
         });
-        let near_window = if binding.is_some() {
+        let is_wifi = kind == "wifi";
+        let near_window = if is_wifi {
+            WIFI_NEAR_SEEN_WINDOW
+        } else if binding.is_some() {
             PHONE_NEAR_SEEN_WINDOW
         } else {
             NEAR_SEEN_WINDOW
         };
-        let present = age
-            .map(|age| age <= near_window)
-            .unwrap_or(false)
-            && ema
-                .map(|ema| ema >= settings.near_rssi as f64)
-                .unwrap_or(false);
+        let present = if is_wifi {
+            age.map(|age| age <= near_window).unwrap_or(false)
+        } else {
+            age.map(|age| age <= near_window).unwrap_or(false)
+                && ema
+                    .map(|ema| ema >= settings.near_rssi as f64)
+                    .unwrap_or(false)
+        };
         DeviceView {
             name: if name.is_empty() {
                 "未命名设备".to_string()
@@ -730,6 +848,12 @@ impl PresenceMonitor {
                 primary = Some(view);
             }
         }
+        if primary.is_none() {
+            primary = views
+                .iter()
+                .find(|view| view.kind == "wifi" && view.present)
+                .or_else(|| views.iter().find(|view| view.kind == "wifi"));
+        }
 
         let names: Vec<String> = bindings
             .iter()
@@ -754,7 +878,18 @@ impl PresenceMonitor {
                 .unwrap_or_default()
         };
         let source = if !bindings.is_empty() {
-            primary.map(|_| "phone".to_string())
+            let has_wifi = bindings.iter().any(|binding| binding.kind == "wifi");
+            let has_ble = bindings.iter().any(|binding| binding.kind != "wifi");
+            Some(
+                if has_wifi && has_ble {
+                    "mixed"
+                } else if has_wifi {
+                    "wifi"
+                } else {
+                    "phone"
+                }
+                .to_string(),
+            )
         } else if !views.is_empty() {
             Some("app".to_string())
         } else {
@@ -767,8 +902,8 @@ impl PresenceMonitor {
             smoothed: primary.and_then(|view| view.smoothed),
             last_seen_age: primary.and_then(|view| view.last_seen_age),
             seen_since_start: inner.seen_since_start,
-            scanning: inner.scanning,
-            error: inner.error.clone(),
+            scanning: inner.scanning(),
+            error: inner.error(),
             address: primary.map(|view| view.address.clone()),
             source,
             phone_adv_enabled: settings.phone_adv_enabled,
@@ -784,7 +919,7 @@ impl PresenceMonitor {
         let settings = self.settings_snapshot();
         let now = Instant::now();
         let mut inner = self.inner.lock().unwrap();
-        if !inner.scanning {
+        if !inner.ble_scanning && !inner.wifi_scanning {
             return None;
         }
 
@@ -800,6 +935,7 @@ impl PresenceMonitor {
                     now,
                     &settings,
                     true,
+                    binding.kind == "wifi",
                     seen_since_start,
                     first_seen_at,
                 ));
@@ -832,6 +968,7 @@ impl PresenceMonitor {
                     now,
                     &settings,
                     false,
+                    false,
                     seen_since_start,
                     first_seen_at,
                 ));
@@ -863,7 +1000,12 @@ impl PresenceMonitor {
             info!("手机距离状态：{old_state} -> {new_state}");
         }
 
-        if !settings.phone_adv_enabled || !settings.bound_devices.is_empty() {
+        if !settings.phone_adv_enabled
+            || settings
+                .bound_devices
+                .iter()
+                .any(|binding| binding.kind != "wifi")
+        {
             return None;
         }
         if inner.bind_ready_at.is_none() {
@@ -902,10 +1044,21 @@ impl PresenceMonitor {
         now: Instant,
         settings: &Settings,
         phone_mode: bool,
+        wifi: bool,
         seen_since_start: bool,
         first_seen_at: Option<Instant>,
     ) -> DeviceStatus {
-        let (near_window, near_confirm, away_timeout) = if phone_mode {
+        let (near_window, near_confirm, away_timeout) = if wifi {
+            (
+                WIFI_NEAR_SEEN_WINDOW,
+                settings.near_confirm.max(2.0),
+                if settings.auto_lock {
+                    settings.away_timeout.max(PHONE_MIN_AWAY_TIMEOUT)
+                } else {
+                    settings.away_timeout
+                },
+            )
+        } else if phone_mode {
             (
                 PHONE_NEAR_SEEN_WINDOW,
                 settings.near_confirm.max(2.0),
@@ -938,8 +1091,16 @@ impl PresenceMonitor {
         let ema = entry.ema;
         let seen_age = last_seen.map(|time| now.saturating_duration_since(time).as_secs_f64());
         let recent = seen_age.map(|age| age <= near_window).unwrap_or(false);
-        let present = recent && ema.map(|value| value >= settings.near_rssi as f64).unwrap_or(false);
-        let weak = recent && ema.map(|value| value <= settings.far_rssi as f64).unwrap_or(false);
+        let present = if wifi {
+            recent
+        } else {
+            recent && ema.map(|value| value >= settings.near_rssi as f64).unwrap_or(false)
+        };
+        let weak = !wifi
+            && recent
+            && ema
+                .map(|value| value <= settings.far_rssi as f64)
+                .unwrap_or(false);
 
         if present {
             if entry.near_since.is_none() {

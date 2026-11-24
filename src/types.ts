@@ -1,6 +1,6 @@
 export type PresenceState = "unknown" | "near" | "away";
 export type DevicePolicy = "any" | "all";
-export type DeviceKind = "phone" | "ble";
+export type DeviceKind = "phone" | "ble" | "wifi";
 export type HideMode = "hidden" | "tray";
 export type ThemeMode = "system" | "dark" | "light";
 
