@@ -78,8 +78,15 @@ fn init_logging() {
     let _ = simplelog::WriteLogger::init(simplelog::LevelFilter::Info, config, file);
 }
 
+fn set_window_open(app: &tauri::AppHandle, open: bool) {
+    if let Some(state) = app.try_state::<ManagedState>() {
+        state.controller.set_window_open(open);
+    }
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        set_window_open(app, true);
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -92,6 +99,13 @@ fn show_main(app: &tauri::AppHandle) {
     match tauri::WebviewWindowBuilder::from_config(app, &config) {
         Ok(builder) => match builder.build() {
             Ok(window) => {
+                let app_handle = app.clone();
+                window.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Destroyed) {
+                        set_window_open(&app_handle, false);
+                    }
+                });
+                set_window_open(app, true);
                 let _ = window.show();
                 let _ = window.set_focus();
             }
@@ -253,7 +267,8 @@ fn uninstall_cp(
 }
 
 #[tauri::command]
-fn hide_window(app: tauri::AppHandle) {
+fn hide_window(app: tauri::AppHandle, state: tauri::State<'_, ManagedState>) {
+    state.controller.set_window_open(false);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.destroy();
     }

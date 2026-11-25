@@ -21,6 +21,16 @@ const CP_CACHE_SECONDS: f64 = 5.0;
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(300);
 const RESUME_DEBOUNCE_SECONDS: f64 = 5.0;
 
+fn probe_needed(
+    window_open: bool,
+    locked: bool,
+    auto_lock: bool,
+    paused: bool,
+    remote: bool,
+) -> bool {
+    window_open || locked || (auto_lock && !paused && !remote)
+}
+
 #[derive(Serialize, Clone)]
 pub struct Snapshot {
     pub presence: PresenceSnapshot,
@@ -280,6 +290,10 @@ impl Controller {
         log::info!("手动刷新手机检测");
     }
 
+    pub fn set_window_open(&self, open: bool) {
+        self.presence.set_window_open(open);
+    }
+
     pub fn rebind_phone(&self) {
         {
             let mut settings = self
@@ -499,6 +513,14 @@ impl Controller {
             let locked = sys::is_locked();
             let remote = sys::is_remote_session();
             self.update_lock_state(locked, remote);
+            let settings = self.settings_snapshot();
+            self.presence.set_probe_allowed(probe_needed(
+                self.presence.window_open(),
+                locked,
+                settings.auto_lock,
+                settings.paused,
+                remote,
+            ));
             self.update_presence_state();
             self.evaluate();
             thread::sleep(LOCK_POLL_INTERVAL);
@@ -711,5 +733,28 @@ impl Controller {
         }
         log::info!("系统已从睡眠/休眠恢复，重新启动 BLE 扫描");
         self.presence.refresh();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::probe_needed;
+
+    #[test]
+    fn suspends_when_window_closed_and_unlocked() {
+        assert!(!probe_needed(false, false, false, false, false));
+    }
+
+    #[test]
+    fn probes_while_window_open_or_locked() {
+        assert!(probe_needed(true, false, false, false, false));
+        assert!(probe_needed(false, true, false, false, false));
+    }
+
+    #[test]
+    fn probes_for_active_auto_lock_only() {
+        assert!(probe_needed(false, false, true, false, false));
+        assert!(!probe_needed(false, false, true, true, false));
+        assert!(!probe_needed(false, false, true, false, true));
     }
 }

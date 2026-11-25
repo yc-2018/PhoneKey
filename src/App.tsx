@@ -43,7 +43,7 @@ import { RenameDialog } from "./components/RenameDialog";
 import { formatRssi, RssiBars } from "./components/RssiBars";
 import { Toggle } from "./components/Toggle";
 
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 const RELEASES_URL = "https://github.com/yc-2018/PhoneKey/releases/latest";
 const FEEDBACK_URL = "https://github.com/yc-2018/PhoneKey/issues/new";
 

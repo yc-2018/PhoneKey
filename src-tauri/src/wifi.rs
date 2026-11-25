@@ -15,6 +15,11 @@ const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 pub async fn scan_loop(presence: Arc<PresenceMonitor>) {
     let mut last_error = String::new();
     while !presence.is_stopped() {
+        if !presence.probe_allowed() {
+            presence.set_wifi_scanning(false, None);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
         let targets = presence.wifi_targets();
         if targets.is_empty() {
             presence.set_wifi_scanning(false, None);

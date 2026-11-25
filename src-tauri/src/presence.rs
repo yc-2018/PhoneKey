@@ -118,6 +118,8 @@ pub struct PresenceMonitor {
     inner: Mutex<PresenceInner>,
     generation: AtomicU64,
     stop: AtomicBool,
+    window_open: AtomicBool,
+    probe_allowed: AtomicBool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -193,6 +195,8 @@ impl PresenceMonitor {
             inner: Mutex::new(PresenceInner::new()),
             generation: AtomicU64::new(0),
             stop: AtomicBool::new(false),
+            window_open: AtomicBool::new(false),
+            probe_allowed: AtomicBool::new(false),
         })
     }
 
@@ -206,6 +210,29 @@ impl PresenceMonitor {
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn set_window_open(&self, open: bool) {
+        self.window_open.store(open, Ordering::Relaxed);
+    }
+
+    pub fn window_open(&self) -> bool {
+        self.window_open.load(Ordering::Relaxed)
+    }
+
+    pub fn set_probe_allowed(&self, allowed: bool) {
+        let was_allowed = self.probe_allowed.swap(allowed, Ordering::Relaxed);
+        if was_allowed != allowed {
+            if allowed {
+                info!("后台探测已启动");
+            } else {
+                info!("窗口已关闭且屏幕未锁定，暂停后台探测");
+            }
+        }
+    }
+
+    pub fn probe_allowed(&self) -> bool {
+        self.probe_allowed.load(Ordering::Relaxed)
     }
 
     pub fn set_scanning(&self, scanning: bool, error: Option<String>) {

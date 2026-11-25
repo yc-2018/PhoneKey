@@ -11,10 +11,18 @@ use crate::presence::{Advertisement, PresenceMonitor};
 pub async fn scan_loop(presence: Arc<PresenceMonitor>) {
     let mut last_error = String::new();
     while !presence.is_stopped() {
+        if !presence.probe_allowed() {
+            presence.set_scanning(false, None);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        }
         let generation = presence.generation();
         let result = scan_once(presence.clone(), generation).await;
         if presence.is_stopped() {
             break;
+        }
+        if !presence.probe_allowed() {
+            continue;
         }
         if presence.generation() != generation {
             continue;
@@ -65,6 +73,11 @@ async fn scan_once(
 
     loop {
         if presence.is_stopped() || presence.generation() != generation {
+            let _ = adapter.stop_scan().await;
+            presence.set_scanning(false, None);
+            return Ok(());
+        }
+        if !presence.probe_allowed() {
             let _ = adapter.stop_scan().await;
             presence.set_scanning(false, None);
             return Ok(());

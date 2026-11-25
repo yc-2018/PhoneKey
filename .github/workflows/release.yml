@@ -92,7 +92,7 @@ jobs:
             - 绿色版：解压 `PhoneKey-${{ steps.package.outputs.version }}-portable.zip`，运行 `PhoneKey\phonekey.exe`。
             - 首次使用请在「解锁」页安装凭证组件（需要管理员权限），保存 Windows 密码并添加解锁设备。
             - 手机蓝牙广播目前仅支持小米；其他品牌可添加 Wi-Fi 辅助，但 Wi-Fi 辅助只按 IP / 主机名判断，不校验 MAC，只能确认同网在线，不能判断距离。
-            - 关闭主窗口会销毁界面并释放 WebView2 内存，后台扫描继续；从托盘图标或再次运行快捷方式重新打开。
+            - 关闭主窗口会销毁界面并释放 WebView2 内存；未锁屏且未开启「离开自动锁屏」时暂停 BLE 与 Wi-Fi 探测，锁屏或重新打开窗口后恢复。
             - 系统要求：Windows 11 x64，小米手机开启系统 BLE 广播，或使用 Wi-Fi 辅助。
             - 锁屏组件依赖 Microsoft Visual C++ 2015–2022 x64 运行库；缺失时安装包会提示，请先补装再安装组件。
           files: |
