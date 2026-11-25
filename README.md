@@ -281,7 +281,7 @@ npm run tauri build
 - 可执行文件输出在 `target/release/phonekey.exe`，NSIS 安装包输出在
   `target/release/bundle/nsis/`。
 - 仓库自带 GitHub Actions 发行工作流：推送 `v*` 标签即构建安装包与便携版，
-  标签名需与 `src-tauri/tauri.conf.json` 中的版本号一致（如 `v1.2.1`）。
+  标签名需与 `src-tauri/tauri.conf.json` 中的版本号一致（如 `v1.2.2`）。
 
 ## 项目结构
 
