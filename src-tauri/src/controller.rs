@@ -31,6 +31,22 @@ fn probe_needed(
     window_open || locked || (auto_lock && !paused && !remote)
 }
 
+fn should_auto_lock_after_leave(
+    previous: &str,
+    next: &str,
+    auto_lock: bool,
+    locked: bool,
+    paused: bool,
+    remote: bool,
+) -> bool {
+    previous == STATE_NEAR
+        && next == STATE_AWAY
+        && auto_lock
+        && !locked
+        && !paused
+        && !remote
+}
+
 #[derive(Serialize, Clone)]
 pub struct Snapshot {
     pub presence: PresenceSnapshot,
@@ -575,6 +591,15 @@ impl Controller {
         {
             let mut inner = self.inner.lock().unwrap_or_else(|poison| poison.into_inner());
             if state != inner.presence_state {
+                let previous = inner.presence_state.clone();
+                let arm_lock = should_auto_lock_after_leave(
+                    &previous,
+                    &state,
+                    settings.auto_lock,
+                    inner.locked,
+                    settings.paused,
+                    inner.remote,
+                );
                 inner.presence_state = state.clone();
                 if state == STATE_NEAR {
                     inner.pending_lock_at = None;
@@ -582,10 +607,14 @@ impl Controller {
                         inner.last_action = "手机在附近 · 点击解锁时仍需检测".to_string();
                     }
                 } else if state == STATE_AWAY {
-                    inner.pending_lock_at = None;
+                    inner.pending_lock_at = arm_lock.then(|| {
+                        Instant::now() + Duration::from_secs_f64(settings.lock_grace)
+                    });
                     if inner.locked && settings.click_unlock {
                         inner.last_action = "手机已离开 · 点击解锁时会重新检测".to_string();
                     }
+                } else {
+                    inner.pending_lock_at = None;
                 }
             }
             if inner.locked {
@@ -616,18 +645,11 @@ impl Controller {
                     action = Some("withdraw");
                 }
             } else {
-                if settings.auto_lock
-                    && scan_ok
-                    && !inner.locked
-                    && presence.state == STATE_AWAY
-                    && presence.seen_since_start
-                {
-                    if inner.pending_lock_at.is_none() {
-                        inner.pending_lock_at =
-                            Some(now + Duration::from_secs_f64(settings.lock_grace));
-                    }
-                } else if inner.pending_lock_at.is_some()
-                    && (inner.locked || presence.state != STATE_AWAY || !scan_ok)
+                if inner.pending_lock_at.is_some()
+                    && (inner.locked
+                        || !settings.auto_lock
+                        || presence.state != STATE_AWAY
+                        || !scan_ok)
                 {
                     inner.pending_lock_at = None;
                 }
@@ -739,6 +761,8 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::probe_needed;
+    use super::should_auto_lock_after_leave;
+    use crate::presence::{STATE_AWAY, STATE_NEAR, STATE_UNKNOWN};
 
     #[test]
     fn suspends_when_window_closed_and_unlocked() {
@@ -756,5 +780,34 @@ mod tests {
         assert!(probe_needed(false, false, true, false, false));
         assert!(!probe_needed(false, false, true, true, false));
         assert!(!probe_needed(false, false, true, false, true));
+    }
+
+    #[test]
+    fn auto_lock_only_triggers_on_near_to_away_transition() {
+        assert!(should_auto_lock_after_leave(
+            STATE_NEAR, STATE_AWAY, true, false, false, false
+        ));
+        assert!(!should_auto_lock_after_leave(
+            STATE_AWAY, STATE_AWAY, true, false, false, false
+        ));
+        assert!(!should_auto_lock_after_leave(
+            STATE_UNKNOWN, STATE_AWAY, true, false, false, false
+        ));
+    }
+
+    #[test]
+    fn auto_lock_does_not_trigger_while_inactive_or_locked() {
+        assert!(!should_auto_lock_after_leave(
+            STATE_NEAR, STATE_AWAY, false, false, false, false
+        ));
+        assert!(!should_auto_lock_after_leave(
+            STATE_NEAR, STATE_AWAY, true, true, false, false
+        ));
+        assert!(!should_auto_lock_after_leave(
+            STATE_NEAR, STATE_AWAY, true, false, true, false
+        ));
+        assert!(!should_auto_lock_after_leave(
+            STATE_NEAR, STATE_AWAY, true, false, false, true
+        ));
     }
 }

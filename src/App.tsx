@@ -999,7 +999,7 @@ function App() {
               <div className="settings-card">
                 <SettingSwitch
                   title="离开后自动锁屏"
-                  description="所有钥匙设备都判定为离开后，锁定此电脑"
+                  description="钥匙设备从附近变为离开后，锁定此电脑"
                   checked={settings.auto_lock}
                   onChange={(value) => updateSetting("auto_lock", value, 0)}
                 />
