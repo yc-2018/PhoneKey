@@ -882,21 +882,11 @@ impl PresenceMonitor {
                 .or_else(|| views.iter().find(|view| view.kind == "wifi"));
         }
 
-        let names: Vec<String> = bindings
-            .iter()
-            .map(|binding| {
-                let name = binding
-                    .custom_name
-                    .clone()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| binding.name.clone());
-                if name.is_empty() {
-                    "未命名设备".to_string()
-                } else {
-                    name
-                }
-            })
-            .collect();
+        let names: Vec<String> = if bindings.is_empty() {
+            Vec::new()
+        } else {
+            views.iter().map(|view| view.name.clone()).collect()
+        };
         let phone_name = if !names.is_empty() {
             names.join("、")
         } else {
