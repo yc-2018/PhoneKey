@@ -24,6 +24,7 @@ use crate::config::Settings;
 use crate::presence::{PresenceMonitor, VERIFY_TIMEOUT};
 use crate::secret;
 use crate::sys::{self, win32_code};
+use crate::wifi;
 
 const PIPE_NAME: &str = r"\\.\pipe\PhoneKeyVerify";
 const SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)(D;;GA;;;AN)(D;;GA;;;NU)";
@@ -191,6 +192,7 @@ fn run(presence: Arc<PresenceMonitor>, stop: Arc<AtomicBool>) {
             let command = String::from_utf8_lossy(&buffer[..read as usize]);
             let response: &[u8] = if command.starts_with("VERIFY") {
                 info!("收到锁屏点击校验请求");
+                wifi::probe_now(&presence);
                 let near = presence.verify_near(VERIFY_TIMEOUT);
                 info!(
                     "锁屏点击校验：{}",
@@ -329,6 +331,7 @@ fn credential_response(presence: &PresenceMonitor, settings: &RwLock<Settings>) 
         return b"NOCRED".to_vec();
     }
     info!("收到锁屏凭据请求");
+    wifi::probe_now(presence);
     if !presence.verify_near(VERIFY_TIMEOUT) {
         info!("锁屏凭据请求：手机不在附近，已拒绝");
         return b"DENY".to_vec();

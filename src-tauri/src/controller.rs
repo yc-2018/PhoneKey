@@ -323,6 +323,7 @@ impl Controller {
             save_settings(&mut settings);
         }
         self.presence.rebind();
+        self.presence.set_auto_bind(true);
         if let Ok(mut inner) = self.inner.lock() {
             inner.lock_check = None;
             inner.last_action = "正在自动识别手机广播…".to_string();
@@ -336,6 +337,7 @@ impl Controller {
         devices: Vec<DeviceBinding>,
         policy: &str,
     ) -> Result<(), String> {
+        self.presence.set_auto_bind(false);
         let (count, condition) = {
             let mut settings = self
                 .settings

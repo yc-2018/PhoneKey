@@ -52,6 +52,7 @@ struct DeviceState {
     ema: Option<f64>,
     last_sample: Option<Instant>,
     last_seen: Option<Instant>,
+    last_probe_ok: Option<bool>,
     near_since: Option<Instant>,
     weak_since: Option<Instant>,
 }
@@ -120,6 +121,7 @@ pub struct PresenceMonitor {
     stop: AtomicBool,
     window_open: AtomicBool,
     probe_allowed: AtomicBool,
+    auto_bind: AtomicBool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -190,6 +192,10 @@ enum Classified {
 
 impl PresenceMonitor {
     pub fn new(settings: Arc<RwLock<Settings>>) -> Arc<Self> {
+        let auto_bind = settings
+            .read()
+            .map(|settings| settings.bound_devices.is_empty())
+            .unwrap_or(false);
         Arc::new(Self {
             settings,
             inner: Mutex::new(PresenceInner::new()),
@@ -197,7 +203,15 @@ impl PresenceMonitor {
             stop: AtomicBool::new(false),
             window_open: AtomicBool::new(false),
             probe_allowed: AtomicBool::new(false),
+            auto_bind: AtomicBool::new(auto_bind),
         })
+    }
+
+    pub fn set_auto_bind(&self, allowed: bool) {
+        self.auto_bind.store(allowed, Ordering::Relaxed);
+        let mut inner = self.inner.lock().unwrap();
+        inner.bind_ready_at = None;
+        inner.bind_candidates.clear();
     }
 
     pub fn generation(&self) -> u64 {
@@ -444,6 +458,9 @@ impl PresenceMonitor {
         rssi: i16,
         now: Instant,
     ) {
+        if !self.auto_bind.load(Ordering::Relaxed) {
+            return;
+        }
         let prefix: String = payload_hex.chars().take(PHONE_PREFIX_CHARS).collect();
         let key = (address.to_string(), prefix.clone());
         let mut inner = self.inner.lock().unwrap();
@@ -532,6 +549,7 @@ impl PresenceMonitor {
                 ema: None,
                 last_sample: None,
                 last_seen: None,
+                last_probe_ok: None,
                 near_since: None,
                 weak_since: None,
             });
@@ -569,11 +587,14 @@ impl PresenceMonitor {
 
     pub fn bind_auto(&self, mut binding: DeviceBinding) -> bool {
         binding.normalize();
-        if binding.key().is_empty() {
+        if binding.key().is_empty() || !self.auto_bind.load(Ordering::Relaxed) {
             return false;
         }
         {
             let mut settings = self.settings.write().unwrap();
+            if !self.auto_bind.load(Ordering::Relaxed) {
+                return false;
+            }
             if settings
                 .bound_devices
                 .iter()
@@ -596,6 +617,7 @@ impl PresenceMonitor {
             save_settings(&mut settings);
         }
         let mut inner = self.inner.lock().unwrap();
+        self.auto_bind.store(false, Ordering::Relaxed);
         inner.bind_candidates.clear();
         inner.bind_ready_at = None;
         info!(
@@ -639,6 +661,7 @@ impl PresenceMonitor {
                 ema: None,
                 last_sample: None,
                 last_seen: None,
+                last_probe_ok: None,
                 near_since: None,
                 weak_since: None,
             });
@@ -647,6 +670,7 @@ impl PresenceMonitor {
         }
         entry.address = binding.address.clone();
         entry.kind = "wifi".to_string();
+        entry.last_probe_ok = Some(present);
         if present {
             let was_stale = entry
                 .last_seen
@@ -693,8 +717,13 @@ impl PresenceMonitor {
                         && inner
                             .device_states
                             .get(&binding.key())
-                            .and_then(|entry| entry.last_seen)
-                            .map(|last_seen| now.duration_since(last_seen) <= wifi_max_age)
+                            .map(|entry| {
+                                entry.last_probe_ok == Some(true)
+                                    && entry
+                                        .last_seen
+                                        .map(|last_seen| now.duration_since(last_seen) <= wifi_max_age)
+                                        .unwrap_or(false)
+                            })
                             .unwrap_or(false)
                 } else {
                     inner.ble_scanning
@@ -1017,7 +1046,8 @@ impl PresenceMonitor {
             info!("手机距离状态：{old_state} -> {new_state}");
         }
 
-        if !settings.phone_adv_enabled
+        if !self.auto_bind.load(Ordering::Relaxed)
+            || !settings.phone_adv_enabled
             || settings
                 .bound_devices
                 .iter()
@@ -1195,4 +1225,72 @@ fn first_non_empty(values: &[String]) -> String {
 
 fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wifi_binding() -> DeviceBinding {
+        let mut binding = DeviceBinding {
+            name: "Wi-Fi 设备".to_string(),
+            custom_name: None,
+            address: "192.168.1.5".to_string(),
+            prefix: String::new(),
+            kind: "wifi".to_string(),
+        };
+        binding.normalize();
+        binding
+    }
+
+    fn monitor_with(devices: Vec<DeviceBinding>) -> Arc<PresenceMonitor> {
+        let mut settings = Settings::default();
+        settings.bound_devices = devices;
+        settings.normalize();
+        PresenceMonitor::new(Arc::new(RwLock::new(settings)))
+    }
+
+    #[test]
+    fn wifi_unlock_requires_latest_probe_success() {
+        let monitor = monitor_with(vec![wifi_binding()]);
+        monitor.set_wifi_scanning(true, None);
+        let targets = monitor.wifi_targets();
+        assert_eq!(targets.len(), 1);
+        monitor.update_wifi(&targets[0], true);
+        assert!(monitor.check_near(None));
+        monitor.update_wifi(&targets[0], false);
+        assert!(!monitor.check_near(None));
+    }
+
+    #[test]
+    fn manual_selection_disables_auto_binding() {
+        let monitor = monitor_with(Vec::new());
+        assert!(monitor.auto_bind.load(Ordering::Relaxed));
+        monitor.set_auto_bind(false);
+        monitor.collect_candidate(
+            "AA:BB:CC:DD:EE:FF",
+            "0123456789abcdef",
+            "Xiaomi",
+            -50,
+            Instant::now(),
+        );
+        assert!(monitor.inner.lock().unwrap().bind_candidates.is_empty());
+        let candidate = DeviceBinding {
+            name: "Xiaomi".to_string(),
+            custom_name: None,
+            address: "AA:BB:CC:DD:EE:FF".to_string(),
+            prefix: "0123456789abcdef".to_string(),
+            kind: "phone".to_string(),
+        };
+        assert!(!monitor.bind_auto(candidate));
+        assert!(monitor.settings.read().unwrap().bound_devices.is_empty());
+    }
+
+    #[test]
+    fn existing_bindings_start_with_auto_binding_disabled() {
+        let monitor = monitor_with(vec![wifi_binding()]);
+        assert!(!monitor.auto_bind.load(Ordering::Relaxed));
+        monitor.set_auto_bind(true);
+        assert!(monitor.auto_bind.load(Ordering::Relaxed));
+    }
 }

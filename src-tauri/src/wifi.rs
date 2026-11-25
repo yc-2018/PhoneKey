@@ -80,15 +80,68 @@ fn ping_path() -> Option<PathBuf> {
 }
 
 fn ping_host(ping: &PathBuf, host: &str) -> bool {
-    let mut command = Command::new(ping);
-    command
-        .args(["-n", "1", "-w", "800", host])
+    let output = Command::new(ping)
+        .args(["-n", "1", "-w", "800", "-4", host])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW);
-    command
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    match output {
+        Ok(output) => output.status.success() && has_echo_reply(&output.stdout),
+        Err(_) => false,
+    }
+}
+
+fn has_echo_reply(stdout: &[u8]) -> bool {
+    stdout
+        .windows(4)
+        .any(|window| window.eq_ignore_ascii_case(b"TTL="))
+}
+
+pub fn probe_now(presence: &PresenceMonitor) {
+    let targets = presence.wifi_targets();
+    if targets.is_empty() {
+        return;
+    }
+    let Some(ping) = ping_path() else {
+        for binding in &targets {
+            presence.update_wifi(binding, false);
+        }
+        return;
+    };
+    let results: Vec<(DeviceBinding, bool)> = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(targets.len());
+        for binding in targets {
+            let ping = ping.clone();
+            handles.push(scope.spawn(move || {
+                let online = ping_host(&ping, &binding.address);
+                (binding, online)
+            }));
+        }
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .collect()
+    });
+    for (binding, online) in results {
+        presence.update_wifi(&binding, online);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_echo_reply;
+
+    #[test]
+    fn echo_reply_requires_ttl_marker() {
+        assert!(has_echo_reply(
+            b"Reply from 192.168.1.5: bytes=32 time<1ms TTL=64\r\n"
+        ));
+        assert!(has_echo_reply(b"ttl=64"));
+        assert!(!has_echo_reply(b"Request timed out.\r\n"));
+        assert!(!has_echo_reply(
+            "来自 192.168.1.5 的回复: 无法访问目标主机\r\n".as_bytes()
+        ));
+    }
 }

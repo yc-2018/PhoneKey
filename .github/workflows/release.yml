@@ -88,8 +88,8 @@ jobs:
           body: |
             PhoneKey ${{ steps.package.outputs.version }}
 
-            - 修复开启「离开后自动锁屏」后，手机持续不在附近时手动登录仍会被反复锁屏的问题；现在只在「在附近 → 离开」时触发一次。
-            - 修复部分设备顶部状态显示「未命名设备」的问题，设备名称现在与列表、重命名弹窗一致。
+            - 修复 Wi-Fi 辅助在手机已断开 Wi-Fi、无法 ping 通时仍可能被判为在线并允许锁屏解锁的问题；现在会校验真实 ping 回包，点击解锁时会现场重新探测，未响应直接拒绝。
+            - 修复手动删除蓝牙设备后，自动识别又把同一台手机加回列表的问题；手动增删设备后不再自动加回，需要重新自动识别时点「重新识别手机」（会保留 Wi-Fi 辅助）。
             - 安装版：运行 `PhoneKey-${{ steps.package.outputs.version }}-setup.exe`。
             - 绿色版：解压 `PhoneKey-${{ steps.package.outputs.version }}-portable.zip`，运行 `PhoneKey\phonekey.exe`。
             - 首次使用请在「解锁」页安装凭证组件（需要管理员权限），保存 Windows 密码并添加解锁设备。
